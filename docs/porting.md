@@ -54,3 +54,13 @@ Discovery, DAD, DHCP and IP routing. Enable `RT_USING_LWIP_IPV6` for IPv6. The
 status command is `ipheth_status`; `ifconfig` shows network addresses and flags.
 The RT device's two-character name can differ from lwIP's name plus numeric
 index; consumers should query the actual interface instead of assuming index 0.
+
+## EHCI multi-qTD short IN
+
+The 64 KiB NCM request requires an HCD that completes a bulk IN URB when an
+early qTD ends with a short packet, even if following qTDs remain Active. The
+pinned a0054795 EHCI implementation has a reproduced defect in this path. The
+D213 SDK carries a separate tested controller patch; it is not bundled with
+this portable driver. See the v6 record in validation.md. Do not shrink NCM
+buffers or fabricate standard CDC descriptors to hide controller completion
+bugs. Other HCDs must satisfy the same short-transfer contract.

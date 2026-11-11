@@ -42,14 +42,15 @@ Image:
 
 ```text
 output/d21x_demo128-nand_rt-thread_rtcarplay/images/d21x_demo128_nand_carplay_page_2k_block_128k_v1.0.0.img
-SHA256 c1a36eab89b2494bb17c56e5cda18662c1cb1d3a8d3240844993498417f73c1c
+SHA256 9897fa7d48fbbc07bf4dc19320b2bdf39c79d9f7644bbccbdc8a2744341d3af1
 ```
 
-The unique v5 test artifact is
-`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v5/d213-carplay-ipheth-cherryusb-1.6.1-v5.img`.
+The unique v6 test artifact is
+`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v6/d213-carplay-ipheth-cherryusb-1.6.1-v6.img`.
 It contains official CherryUSB 1.6.1 at a0054795 and application DMA fix
-`382b293`, plus IPHETH readiness correction and RX diagnostics `1283913`. V5
-has a complete firmware build and awaits board testing. Both plain and
+`382b293`, plus IPHETH readiness correction and RX diagnostics `1283913`. V6
+adds SDK EHCI short-IN correction `88ef9b599`, has a complete firmware build
+and awaits board testing. Both plain and
 ASan/UBSan host suites passed all three tests with this code. The previous image (SHA256
 starting 5df9aa72) must not be used for this retest.
 
@@ -197,3 +198,33 @@ expected state is ready=no, carrier=down and no IPHETH Bulk OUT submissions.
 Local Link-Local VALID alone continues to be insufficient evidence of traffic.
 If readiness remains absent, investigate external trust and controller/USB
 captures independently; do not add pairing protocols to the Ethernet driver.
+
+## V5 board observation and SDK EHCI reproduction (v6)
+
+V5 UART: i0 attached, RX/TX/errors all zero, submitted=1 completions=0,
+ready=no, carrier=down, LINK_DOWN. This confirms the readiness gate is working;
+it does not establish whether the phone is silent or a completion was lost.
+
+Inspection of the actual official EHCI HCD revealed a separate reproducible
+controller defect. The 64 KiB IN request becomes four 16 KiB qTDs. A short
+packet in an early qTD follows its terminating alternate link and leaves the
+later qTDs Active. The old scanner still waits for every later qTD to finish;
+only the final qTD has IOC. A software descriptor/MMIO reproduction using the
+actual original HCD confirms a four-byte first transfer remains pending.
+
+SDK commit `88ef9b599` adds a standalone unified patch and original/patched
+ASan/UBSan regressions under `cherryusb-luban/`. The build patches a generated
+HCD copy; all 933 official source files stay byte-identical to a0054795. The
+patch enables IOC on each bulk IN qTD, recognizes terminal short IN/errors,
+counts only completed descriptors, and refreshes the overlay data toggle.
+Control IN short data still waits for the status stage. Tests cover zero/short
+first or middle IN, complete IN/OUT, pending chains, halted qTD, cache hooks,
+data toggle and control status. Original reproduction and patched tests passed;
+D213 firmware linked and packaged. No IPHETH framing/receive-size workaround or
+pairing change is part of this HCD correction. This patch is prepared for
+upstream review; no PR has been opened.
+
+V6 must still demonstrate real RX completion. Collect the same status snapshots
+and USBMUX status. A successful hardware result is not implied by a software
+reproduction; if completions remain zero, external activation/trust and USB
+traces/controller state remain independent investigation paths.
