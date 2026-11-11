@@ -4,14 +4,14 @@ An external Apple iPhone USB Ethernet host class for CherryUSB. The protocol
 core is C99 and independent of USB libraries, operating systems, and network
 stacks. The included network adapter targets RT-Thread with lwIP 2.x.
 
-This is an initial implementation, with host tests and D213 cross-builds.
-D213 board logs confirm composite USBMUX/IPHETH binding, MAC retrieval, NCM RX
-negotiation, a carrier-on control reply and a locally valid IPv6 Link-Local address.
-The current driver additionally waits for successful Bulk IN before link-up,
-following Linux IPHETH; early carrier-only link-up in v3/v4 was premature.
-**Ethernet traffic and unplug/replug are not yet validated:** the first attached
-v7 snapshots have RX=0, TX=0 and no first Bulk IN completion. Earlier v3/v4
-snapshots had TX timeouts before the readiness gate was added. See
+Host tests and D213 cross-builds pass. User-supplied v13 board logs confirm
+composite USBMUX/IPHETH binding, MAC retrieval, Apple NCM RX negotiation,
+bidirectional Ethernet traffic and DHCP (172.20.10.4/28, gateway 172.20.10.1)
+after external host activation. The interface has a valid IPv6 Link-Local
+address; subsequent application logs show RTSP requests over the advertised
+wired IPv6 endpoint. The driver waits for a successful Bulk IN before link-up,
+following Linux IPHETH. One RX error was recorded; its cause and sustained
+traffic/unplug/replug stability remain to be validated. See
 [validation](docs/validation.md) and the [protocol audit](docs/protocol-audit.md).
 Pairing/trust is an external prerequisite; this project implements no pairing,
 authentication, application session, or device-wide USB configuration policy.

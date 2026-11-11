@@ -100,7 +100,8 @@ Plain CTest and ASan/UBSan suites cover the TX correction at 14, 42, 60, 64,
 70, 512 and 1514 bytes, exact capacities, byte preservation and a canary beyond
 the submitted length. Class tests require actual 42-byte USB OUT length in
 both NCM and legacy cases. The historical 70-byte timeout is unchanged by this
-padding correction. Hardware RX/TX and reconnect stress remain unproven.
+padding correction. Hardware RX/TX was subsequently demonstrated in v13 (see below); reconnect
+stress remains unproven.
 
 Community [libimobiledevice #299](https://github.com/libimobiledevice/libimobiledevice/issues/299)
 corroborates the external-pairing boundary; it is an older discussion, not a
@@ -108,3 +109,19 @@ current protocol specification. [usbmuxd #285](https://github.com/libimobiledevi
 reports Linux NO-CARRIER despite reportedly successful pairing. That unverified
 report is a reminder that pairing success alone is not sufficient evidence of
 Ethernet readiness; it is not assumed to match this phone/model/iOS version.
+
+
+## Subsequent v13 hardware evidence
+
+The supplied D213 run completes external host activation and reports RX=79,
+TX=18, 81 receive completions, ready=yes and carrier=up. DHCP supplies
+172.20.10.4/28 and gateway/DNS 172.20.10.1. Later application traffic reaches the
+advertised wired IPv6 RTSP endpoint. This supersedes the earlier zero-RX state
+without making pairing/session code part of this component. Application
+protocol acceptance and media startup remain separate validation layers.
+
+One RX error remains unclassified, with no recorded USB or TX errors. Sustained
+traffic and physical reconnect stress remain open; this is evidence for one
+observed phone/configuration. The application transport changes between v7 and
+v13 are recorded in its own validation document. A successful run does not
+prove one exclusive cause of the earlier intermittent transport failures.

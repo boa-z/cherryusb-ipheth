@@ -14,9 +14,13 @@ Recognized Apple Ethernet initialization failures now leave the class inactive
 and retain other composite interfaces, with a diagnostic identifying the step.
 Replug after fixing the prerequisite to retry initialization.
 
-The D213 RT-Thread/lwIP 2.1.2 adapter has a complete SDK cross-build. Board logs validate binding and local network-interface setup for the supplied
-iPhone; end-to-end traffic is not yet validated. Host mocks are not evidence
-of on-device transfer, successful trust or correct hardware cache behavior.
+The D213 RT-Thread/lwIP 2.1.2 adapter has a complete SDK cross-build. Supplied
+v13 UART logs validate binding, bidirectional Ethernet traffic, DHCP and a valid
+local IPv6 Link-Local address after external host activation. Subsequent
+application logs show a real RTSP exchange over the advertised wired IPv6
+endpoint. This is one observed device/configuration, not a compatibility claim
+for all iPhones. One RX error, sustained load and unplug/replug stress remain
+open. Host mocks alone do not validate on-device cache behavior.
 
 Provided board observations (external UART evidence):
 

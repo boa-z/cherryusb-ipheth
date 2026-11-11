@@ -1,5 +1,55 @@
 # Validation record and board procedure
 
+## Current hardware result: v13 (2026-11-10)
+
+User-supplied UART logs establish the first working D213 data path. External
+application activation completes Pair, StartSession and service startup, with
+both session and service TLS reported enabled. These operations belong to the
+application; none was added to this driver and the service is not a generic
+IPHETH requirement.
+
+```text
+i0: attached MAC de:b5:4f:73:dd:03 RX=79 TX=18 rxerr=1 txerr=0 usberr=0
+USB RX: submitted=82 completions=81 bytes=33714 control=1 ready=yes carrier=up
+TX failures: frame=0 submit=0 short=0 last=0 length=0 actual=0
+IPv4: 172.20.10.4/28 gateway=172.20.10.1 DNS=172.20.10.1
+IPv6 Link-Local: FE80::DCB5:4FFF:FE73:DD03 VALID
+```
+
+This proves Ethernet receive/transmit and DHCP, while both composite interfaces
+remain usable. A later application run advertises that IPv6 endpoint and
+receives six RTSP requests, including pair setup/verify and authentication,
+before the peer closes the TCP connection. Media streaming has not started.
+That application behavior is outside this component. A pending endpoint-86
+URB after 81 completions is not evidence of a stuck receive path.
+
+The single RX error is unresolved: the counter includes oversized completion,
+packet-parser rejection and network-delivery failure. Zero USB/TX errors do
+not explain it. Compare counters under traffic before changing framing.
+Dedicated peer IPv6/NDP tests, sustained load, legacy-mode hardware coverage
+and disconnect/reconnect stress are still pending. Historical zero-traffic
+results below describe earlier builds; they are not the current result.
+
+Continue using the preserved v13 image; no reflash is needed for these checks:
+
+```text
+ipheth_status
+ping 172.20.10.1
+ipheth_status
+ifconfig
+carplay_usb net
+```
+
+Use the single-argument ping form with i0 as the default interface, as in the
+supplied ifconfig output. The SDK shell's two-argument help disagrees with its
+implementation's argument order, so the procedure avoids that form. Use the
+currently leased gateway if it changes. Record actual ping output;
+DHCP success alone does not establish that the phone answers ICMP. Keep the
+working activation session open. For a subsequent controlled replug, collect
+status before/after removal, reactivate externally as needed, and check for a
+single reused i0, restored traffic and no stale callbacks or resource growth.
+No automatic pairing persistence or reconnection activation is claimed.
+
 ## Automated results (2026-11-10)
 
 - CMake/CTest Debug: protocol, class lifecycle and actual upstream EP0 tests passed.
@@ -44,9 +94,18 @@ The build writes the mutable output path:
 output/d21x_demo128-nand_rt-thread_rtcarplay/images/d21x_demo128_nand_carplay_page_2k_block_128k_v1.0.0.img
 ```
 
-The preserved v7 artifact below has SHA256
-`dcb9bb81ad1c226b1d1c2112335adbb0d4a7f2d9cc58aaed013e6fbc887ac3e4`.
-Later builds overwrite the output path; do not assume it retains the v7 hash.
+The current recommended, hardware-tested artifact is
+`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v13/d213-carplay-ipheth-cherryusb-1.6.1-v13.img`.
+Its size is 4,237,824 bytes and SHA256 is
+`72b542a84c1600799df01e696ebc017e46051a35a1cb2c5a019621799f3c989d`.
+The adjacent manifest pins SDK `a6c3a34a4`, application `e168c31`, and driver
+`25792b9`. SDK upstream CherryUSB remains a0054795; SDK-specific HCD integration
+stays separate. V13 adds application USBMUX reads bounded to 16 KiB following
+usbmuxd, raw error diagnostics and a pre-cancel controller snapshot. Its success
+does not isolate which change or timing difference resolved earlier failures.
+Later builds overwrite the mutable SDK output; use the preserved artifact.
+
+### Historical v7 artifact and diagnostics
 
 The unique v7 diagnostic artifact is
 `/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v7/d213-carplay-ipheth-cherryusb-1.6.1-v7.img`.
