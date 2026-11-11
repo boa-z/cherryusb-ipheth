@@ -17,6 +17,8 @@ struct ipheth_net {
     uint8_t tx[IPHETH_FRAME_MAX];
     uint32_t probe_ms;
     uint32_t probe_tx_errors, probe_rx_errors, probe_usb_errors;
+    uint32_t rx_alloc_fail, rx_copy_fail, rx_input_fail;
+    int rx_input_result;
 };
 static struct ipheth_net nets[CONFIG_USBHOST_IPHETH_MAX_DEVICES];
 uint32_t usbh_ipheth_now_ms(void)
@@ -93,6 +95,10 @@ void *usbh_ipheth_net_attach(struct usbh_ipheth *usb, const uint8_t mac[6])
     n->usb = usb;
     n->probe_ms = usbh_ipheth_now_ms();
     n->probe_tx_errors = n->probe_rx_errors = n->probe_usb_errors = 0;
+    f = rt_hw_interrupt_disable();
+    n->rx_alloc_fail = n->rx_copy_fail = n->rx_input_fail = 0;
+    n->rx_input_result = 0;
+    rt_hw_interrupt_enable(f);
     rt_mutex_release(&n->lock);
     return n;
 fail:
@@ -117,9 +123,21 @@ int usbh_ipheth_net_receive(void *net, const uint8_t *frame, size_t length)
 {
     struct ipheth_net *n = net;
     struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)length, PBUF_POOL);
-    if (!p) return IPHETH_EIO;
-    if (pbuf_take(p, frame, (u16_t)length) != ERR_OK) { pbuf_free(p); return IPHETH_EIO; }
-    if (n->eth.netif->input(p, n->eth.netif) != ERR_OK) { pbuf_free(p); return IPHETH_EIO; }
+    if (!p) {
+        rt_base_t f = rt_hw_interrupt_disable(); ++n->rx_alloc_fail; rt_hw_interrupt_enable(f);
+        return IPHETH_EIO;
+    }
+    if (pbuf_take(p, frame, (u16_t)length) != ERR_OK) {
+        rt_base_t f = rt_hw_interrupt_disable(); ++n->rx_copy_fail; rt_hw_interrupt_enable(f);
+        pbuf_free(p); return IPHETH_EIO;
+    }
+    err_t rc = n->eth.netif->input(p, n->eth.netif);
+    if (rc != ERR_OK) {
+        rt_base_t f = rt_hw_interrupt_disable();
+        ++n->rx_input_fail; n->rx_input_result = rc;
+        rt_hw_interrupt_enable(f);
+        pbuf_free(p); return IPHETH_EIO;
+    }
     return 0;
 }
 /* The application calls this from a low-priority worker. No UART output in
@@ -140,6 +158,26 @@ static void print_latency(const char *name, const struct ipheth_latency *m)
     rt_kprintf("[ipheth-time] %s n=%u avg=%u p95_upper=%u max=%u ms\n", name, m->count,
         m->count ? m->total_ms / m->count : 0, p95(m), m->max_ms);
 }
+static unsigned header16(const uint8_t *p) { return p[0] | ((unsigned)p[1] << 8); }
+static void print_rx_errors(unsigned i, const struct usbh_ipheth_probe *p)
+{
+    static const char *const names[] = {
+        "ok", "argument", "size", "signature", "header", "block", "table",
+        "range", "frame", "overlap", "terminator", "callback"
+    };
+    for (unsigned r = 1; r < IPHETH_RX_REASON_COUNT; ++r)
+        if (p->rx_reasons[r]) rt_kprintf("[ipheth-rxerr] i%u %s=%u\n", i, names[r], p->rx_reasons[r]);
+    if (!p->bad_result) return;
+    const uint8_t *h = p->bad_header;
+    rt_kprintf("[ipheth-rxerr] i%u oversize=%u callback_remaining=%u\n",
+        i, p->rx_oversize, p->rx_callback_remaining);
+    rt_kprintf("[ipheth-rxerr] last reason=%u rc=%d actual=%u dpe=%u off=%u len=%u\n",
+        p->bad.reason, p->bad_result, p->bad_actual, p->bad.index, p->bad.offset, p->bad.length);
+    rt_kprintf("[ipheth-rxerr] nth=%02x%02x%02x%02x hlen=%u seq=%u block=%u ndp=%u\n",
+        h[0], h[1], h[2], h[3], header16(h+4), header16(h+6), header16(h+8), header16(h+10));
+    rt_kprintf("[ipheth-rxerr] ndpsig=%02x%02x%02x%02x table=%u next=%u validated=%u delivered=%u\n",
+        h[12], h[13], h[14], h[15], header16(h+16), header16(h+18), p->bad.validated, p->bad.delivered);
+}
 void ipheth_performance_report(void)
 {
     for (unsigned i = 0; i < CONFIG_USBHOST_IPHETH_MAX_DEVICES; ++i) {
@@ -154,6 +192,12 @@ void ipheth_performance_report(void)
         unsigned usberr = p.usb_errors - n->probe_usb_errors;
         n->probe_ms = now; n->probe_tx_errors = p.tx_errors;
         n->probe_rx_errors = p.rx_errors; n->probe_usb_errors = p.usb_errors;
+        rt_base_t flags = rt_hw_interrupt_disable();
+        unsigned alloc_fail = n->rx_alloc_fail, copy_fail = n->rx_copy_fail, input_fail = n->rx_input_fail;
+        int input_result = n->rx_input_result;
+        n->rx_alloc_fail = n->rx_copy_fail = n->rx_input_fail = 0;
+        n->rx_input_result = 0;
+        rt_hw_interrupt_enable(flags);
         rt_mutex_release(&n->lock);
         rt_kprintf("[ipheth-perf] i%u dt=%ums carrier_poll=%u submit=%u complete=%u\n",
             i, dt, p.carrier_poll, p.rx_submissions, p.rx_completions);
@@ -162,6 +206,10 @@ void ipheth_performance_report(void)
         print_latency("carrier", &p.carrier); print_latency("wake", &p.rx_wake);
         print_latency("rearm", &p.rx_rearm); print_latency("parse", &p.rx_parse);
         print_latency("tx_lock", &p.tx_lock); print_latency("tx_urb", &p.tx_urb);
+        print_rx_errors(i, &p);
+        if (alloc_fail || copy_fail || input_fail)
+            rt_kprintf("[ipheth-neterr] i%u alloc=%u copy=%u input=%u last_input_rc=%d\n",
+                i, alloc_fail, copy_fail, input_fail, input_result);
     }
 }
 #ifdef RT_USING_FINSH

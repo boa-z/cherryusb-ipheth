@@ -52,3 +52,26 @@ The actual-worker host regression injects a 120ms Carrier operation, completes
 an independent RX during it and observes delayed wake/rearm; it checks off/on,
 slow synchronous TX timing, window reset, and the existing lifecycle/error cases.
 This demonstrates the blocking mechanism, not its frequency on a real host.
+# RX error classification (v26)
+
+`rx_errors` counts failed completion-block processing, not individual lost
+Ethernet frames. The diagnostic receive API preserves the original parser
+checks, return codes and callback order. It separates size/signature/header/
+block/table/DPE range/frame size/overlap/termination failures from callback
+failure. A callback failure still stops delivery of subsequent datagrams, as
+before; `callback_remaining` counts the current and subsequent validated but
+not successfully delivered datagrams.
+
+The five-second reporter emits nonzero reason counts and the last failure's
+NTH16/NDP16 header fields (20 bytes), DPE index/offset/length and validated/
+delivered counts. It never retains a DMA view or records Ethernet payload.
+The RT-Thread adapter separately counts pbuf allocation, copy and netif input
+failures, retaining the last input error code. No per-frame UART output is
+added. Adapter and USB snapshots have slightly different boundaries, so
+compare several windows rather than requiring exact single-window equality.
+
+Linux's inspected NCM callback does not enforce every extra constraint in
+this parser. A `block` or `table` failure is evidence to inspect a capture,
+not authorization to drop bounds checks. Header corruption from an HCD/DMA
+fault is another possible source. v26 changes no transfer, parser acceptance,
+timeout, DATA PID or cancellation behavior.

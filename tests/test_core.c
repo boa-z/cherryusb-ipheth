@@ -8,6 +8,8 @@ static int consume(void *arg, const uint8_t *p, size_t n)
 { assert(arg == &frames); assert(p); assert(n >= 14 && n <= 1514); frames++; return 0; }
 static int reject(void *arg, const uint8_t *p, size_t n)
 { (void)arg; (void)p; (void)n; return -19; }
+static int reject_second(void *arg, const uint8_t *p, size_t n)
+{ return frames == 1 ? -19 : consume(arg, p, n); }
 static void put16(uint8_t *p, unsigned n) { p[0] = (uint8_t)n; p[1] = (uint8_t)(n >> 8); }
 static uint8_t descriptor[] = {
     9,2, 0,0, 2,4,0,0x80,50,
@@ -84,6 +86,31 @@ static void framing(void)
     put16(ncm+24, 122); put16(ncm+26, 60);
     frames = 0;
     assert(ipheth_receive(IPHETH_NCM, ncm, sizeof(ncm), consume, &frames) == 2 && frames == 2);
+    /* Diagnostic classification must preserve validation and delivery order.
+     * An identical EINVAL return can mean a block mismatch or a bad DPE;
+     * callback failure must not be mistaken for corrupt USB input. */
+    struct ipheth_rx_diagnostic d;
+    frames = 0;
+    assert(ipheth_receive_diagnose(IPHETH_NCM, ncm, sizeof(ncm), reject_second, &frames, &d) == -19);
+    assert(d.reason == IPHETH_RX_CALLBACK && d.validated == 2 && d.delivered == 1);
+    assert(d.index == 1 && d.offset == 122 && d.length == 60 && frames == 1);
+    const struct { unsigned byte; uint8_t value; enum ipheth_rx_reason reason; } faults[] = {
+        {0, 0, IPHETH_RX_SIGNATURE}, {4, 0, IPHETH_RX_HEADER},
+        {8, 0, IPHETH_RX_BLOCK}, {16, 0, IPHETH_RX_TABLE},
+        {24, 0, IPHETH_RX_RANGE}, {26, 1, IPHETH_RX_FRAME},
+        {24, 121, IPHETH_RX_OVERLAP}, {16, 16, IPHETH_RX_TERMINATOR}
+    };
+    for (unsigned i = 0; i < sizeof(faults) / sizeof(faults[0]); ++i) {
+        uint8_t copy[sizeof(ncm)]; memcpy(copy, ncm, sizeof(copy));
+        copy[faults[i].byte] = faults[i].value; frames = 0;
+        assert(ipheth_receive_diagnose(IPHETH_NCM, copy, sizeof(copy), consume, &frames, &d) == IPHETH_EINVAL);
+        assert(d.reason == faults[i].reason && !d.delivered && !frames);
+    }
+    assert(ipheth_receive_diagnose(IPHETH_NCM, ncm, 107, consume, &frames, &d) == IPHETH_EINVAL);
+    assert(d.reason == IPHETH_RX_SIZE);
+    frames = 0;
+    assert(ipheth_receive_diagnose(IPHETH_NCM, ncm, sizeof(ncm), consume, &frames, &d) == 2);
+    assert(d.reason == IPHETH_RX_OK && d.delivered == 2 && d.validated == 2);
     for (size_t i = 0; i < sizeof(ncm); i++)
         assert(ipheth_receive(IPHETH_NCM, ncm, i, consume, &frames) < 0);
     put16(ncm+24, 121); frames = 0;

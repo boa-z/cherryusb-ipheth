@@ -23,6 +23,12 @@ struct usbh_ipheth_probe {
     struct ipheth_latency carrier, rx_wake, rx_rearm, rx_parse, tx_lock, tx_urb;
     uint32_t carrier_calls, rx_submissions, rx_completions, rx_bytes, rx_frames;
     uint32_t tx_errors, rx_errors, usb_errors;
+    uint32_t rx_reasons[IPHETH_RX_REASON_COUNT], rx_oversize, rx_callback_remaining;
+    uint32_t bad_actual;
+    int bad_result;
+    struct ipheth_rx_diagnostic bad;
+    /* Only NTH16/NDP16 headers, never Ethernet/TLS payload. */
+    uint8_t bad_header[20];
     bool carrier_poll;
 };
 struct usbh_ipheth_stats {

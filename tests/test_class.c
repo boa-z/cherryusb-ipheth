@@ -15,6 +15,7 @@ static atomic_uint attached, detached, delivered, killed, live_resources;
 static atomic_int fail_alloc, fail_thread, reject_attach, fail_cmd, mac_short;
 static atomic_int ncm_stall, tx_failure, tx_short, auto_frame;
 static atomic_int rx_fault, tx_stall, kill_failure;
+static atomic_int bad_block, reject_receive;
 static atomic_uint halt_cleared, carrier_requests;
 static atomic_int tx_delay, tx_entered, carrier_delay, carrier_entered;
 static atomic_uint expected_tx_length = 60;
@@ -112,6 +113,7 @@ int usbh_submit_urb(struct usbh_urb *u)
         if (u->transfer_buffer_length == 65536) {
             memcpy(p, "NCMH", 4); put16(p+4, 12); put16(p+8, 122); put16(p+10, 12);
             memcpy(p+12, "NCM0", 4); put16(p+16, 96); put16(p+20, 108); put16(p+22, 14);
+            if (atomic_load(&bad_block)) put16(p+8, 121);
             size = 122;
         } else size = 16;
         u->complete(u->arg, (int)size);
@@ -136,7 +138,7 @@ void *usbh_ipheth_net_attach(struct usbh_ipheth *d, const uint8_t mac[6])
 { assert(mac[0] == 2); if (atomic_load(&reject_attach)) return NULL; attached++; bound = d; return d; }
 void usbh_ipheth_net_detach(void *n) { assert(n); detached++; }
 int usbh_ipheth_net_receive(void *n, const uint8_t *p, size_t len)
-{ assert(n && p && len == 14); delivered++; return 0; }
+{ assert(n && p && len == 14); if (atomic_load(&reject_receive)) return IPHETH_EIO; delivered++; return 0; }
 void usbh_ipheth_net_link(void *n, bool up) { assert(n); (void)up; }
 static uint8_t desc[] = {
     9,2, 50,0, 1,4,0,0x80,50,
@@ -283,6 +285,22 @@ int main(void)
     atomic_store(&tx_delay, 0);
     assert(!c->disconnect(&h, 2));
     puts("probe test: 120ms Carrier delays RX wake/rearm; polling off/on; slow synchronous TX; window reset");
+    /* Separate malformed NCM from callback failure, and drain reason/header
+     * snapshots without retaining any DMA buffer view across rearm/unplug. */
+    atomic_store(&ncm_stall, 0);
+    for (unsigned bad = 0; bad < 2; ++bad) {
+        atomic_store(&bad_block, bad); atomic_store(&reject_receive, !bad);
+        atomic_store(&auto_frame, 1); assert(!c->connect(&h, 2));
+        wait_link(); usbh_ipheth_take_probe(bound, &probe);
+        assert(probe.rx_errors == 1 && !probe.usb_errors);
+        assert(probe.rx_reasons[bad ? IPHETH_RX_BLOCK : IPHETH_RX_CALLBACK] == 1);
+        assert(probe.bad_actual == 122 && probe.bad_header[0] == 'N');
+        assert(probe.rx_callback_remaining == (bad ? 0u : 1u));
+        usbh_ipheth_take_probe(bound, &probe);
+        assert(!probe.bad_result && !probe.rx_reasons[IPHETH_RX_BLOCK]);
+        assert(!c->disconnect(&h, 2));
+    }
+    atomic_store(&bad_block, 0); atomic_store(&reject_receive, 0);
     /* Disconnect must drain an already running synchronous TX before any
      * mutex/URB storage can be released. */
     atomic_store(&auto_frame, 1);

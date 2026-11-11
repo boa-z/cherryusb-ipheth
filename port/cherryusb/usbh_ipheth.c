@@ -184,9 +184,29 @@ static void worker(void *arg)
                 d->stats.rx_control_transfers += control;
                 usb_osal_leave_critical_section(f);
                 uint32_t parse_started = usbh_ipheth_now_ms();
-                if (!control && ((uint32_t)rc > d->rx.transfer_buffer_length ||
-                    ipheth_receive(d->mode, d->dma->rx, (size_t)rc, frame, d) < 0))
-                    count(&d->stats.rx_errors);
+                if (!control) {
+                    struct ipheth_rx_diagnostic diagnostic = {0};
+                    bool oversize = (uint32_t)rc > d->rx.transfer_buffer_length;
+                    int parsed = oversize ? IPHETH_EINVAL : ipheth_receive_diagnose(
+                        d->mode, d->dma->rx, (size_t)rc, frame, d, &diagnostic);
+                    if (parsed < 0) {
+                        size_t flags = usb_osal_enter_critical_section();
+                        ++d->stats.rx_errors;
+                        if (oversize) ++d->probe.rx_oversize;
+                        else ++d->probe.rx_reasons[diagnostic.reason];
+                        if (diagnostic.reason == IPHETH_RX_CALLBACK)
+                            d->probe.rx_callback_remaining += diagnostic.validated - diagnostic.delivered;
+                        d->probe.bad_actual = (uint32_t)rc;
+                        d->probe.bad_result = parsed;
+                        d->probe.bad = diagnostic;
+                        memset(d->probe.bad_header, 0, sizeof(d->probe.bad_header));
+                        /* Even an impossible HCD length cannot authorize an
+                         * out-of-bounds read. Only capture headers in NCM. */
+                        if (d->mode == IPHETH_NCM && rc >= 20)
+                            memcpy(d->probe.bad_header, d->dma->rx, sizeof(d->probe.bad_header));
+                        usb_osal_leave_critical_section(flags);
+                    }
+                }
                 latency(&d->probe.rx_parse, usbh_ipheth_now_ms() - parse_started);
             } else if (rc < 0) {
                 count(&d->stats.usb_errors);

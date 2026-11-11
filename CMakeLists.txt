@@ -30,9 +30,6 @@ if(IPHETH_TESTS AND CHERRYUSB_ROOT)
   target_compile_options(test_class PRIVATE -Wall -Wextra -Werror -UNDEBUG)
   target_link_libraries(test_class PRIVATE ipheth Threads::Threads)
   add_test(NAME usb_lifecycle COMMAND test_class)
-endif()
-
-if(IPHETH_TESTS AND CHERRYUSB_ROOT)
   # Keep the real upstream EP0 implementation; discard unrelated host functions.
   add_executable(test_control tests/test_control.c "${CHERRYUSB_ROOT}/core/usbh_core.c")
   target_include_directories(test_control PRIVATE tests/config
