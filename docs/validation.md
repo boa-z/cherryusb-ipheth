@@ -42,12 +42,13 @@ Image:
 
 ```text
 output/d21x_demo128-nand_rt-thread_rtcarplay/images/d21x_demo128_nand_carplay_page_2k_block_128k_v1.0.0.img
-SHA256 02d34f3233b26d91e2c2bbe41b629a1705347f1cf28baef14af0d9f4bc32a174
+SHA256 91ae4f9c1b5c19cc742f329446ce33285ca4a21709c8e5536e9d8fd632dc7eee
 ```
 
-The unique v2 test artifact is
-`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v2/d213-carplay-ipheth-cherryusb-1.6.1-v2.img`.
-It contains official CherryUSB 1.6.1 at a0054795. The previous image (SHA256
+The unique v3 test artifact is
+`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v3/d213-carplay-ipheth-cherryusb-1.6.1-v3.img`.
+It contains official CherryUSB 1.6.1 at a0054795 and application DMA fix
+`382b293`. The previous image (SHA256
 starting 5df9aa72) must not be used for this retest.
 
 The firmware builds with USB1 host and IPv6. The current image's startup says
@@ -57,8 +58,16 @@ exists before collecting network results. Board reports have confirmed the new
 entry banner, correct configuration selection, USBMUX binding and IPHETH class
 matching. The first attempt then failed with -2 during Ethernet initialization
 and the old enumerator detached USBMUX. The old control-length contract was
-identified as the cause; the official-stack v2 image and inactive-class failure
-handling address it. Successful vendor requests and actual network traffic
+identified as the cause; the official stack and inactive-class failure
+handling address it. The v2 hardware attempt then stopped earlier in application
+configuration scanning: EHCI asserted because the application submitted an
+unaligned stack Setup packet / descriptor buffer. The v3 application copies
+control and USBMUX buffers through owned, cache-line-aligned/padded DMA storage.
+Official core and EHCI assertions remain unchanged. The actual application port
+is now compiled by a host ASan/UBSan regression covering unaligned input, short
+replies, bounds, allocation failures, timeout cancellation and late callbacks.
+V2 (SHA256 starting 02d34f32) is superseded; successful enumeration of v3 still
+requires board evidence. Successful vendor requests and actual network traffic
 remain pending hardware retest. No local board/serial access is available.
 
 ## Board procedure (115200, 8N1)
