@@ -42,13 +42,14 @@ Image:
 
 ```text
 output/d21x_demo128-nand_rt-thread_rtcarplay/images/d21x_demo128_nand_carplay_page_2k_block_128k_v1.0.0.img
-SHA256 91ae4f9c1b5c19cc742f329446ce33285ca4a21709c8e5536e9d8fd632dc7eee
+SHA256 45f52cc77416cbca797543cc2949bbb0747676d15535a406af3df9c549001a04
 ```
 
-The unique v3 test artifact is
-`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v3/d213-carplay-ipheth-cherryusb-1.6.1-v3.img`.
+The unique v4 diagnostic artifact is
+`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v4/d213-carplay-ipheth-cherryusb-1.6.1-v4.img`.
 It contains official CherryUSB 1.6.1 at a0054795 and application DMA fix
-`382b293`. The previous image (SHA256
+`382b293`, plus IPHETH TX diagnostics `1518ceb`. V4 has a complete firmware
+build and awaits board testing. The previous image (SHA256
 starting 5df9aa72) must not be used for this retest.
 
 The firmware builds with USB1 host and IPv6. The current image's startup says
@@ -66,9 +67,9 @@ control and USBMUX buffers through owned, cache-line-aligned/padded DMA storage.
 Official core and EHCI assertions remain unchanged. The actual application port
 is now compiled by a host ASan/UBSan regression covering unaligned input, short
 replies, bounds, allocation failures, timeout cancellation and late callbacks.
-V2 (SHA256 starting 02d34f32) is superseded; successful enumeration of v3 still
-requires board evidence. Successful vendor requests and actual network traffic
-remain pending hardware retest. No local board/serial access is available.
+V2 (SHA256 starting 02d34f32) is superseded. V3 subsequently enumerated and
+bound successfully; its board result is recorded below. Actual network traffic
+remains pending. No local board/serial access is available.
 
 ## Board procedure (115200, 8N1)
 
@@ -127,9 +128,9 @@ network verification does not require starting an application receiver session.
 
 ## Still requiring hardware evidence
 
-Actual vendor request/reply captures; chosen NCM vs legacy mode; valid MAC;
-carrier and IPv6 DAD; Ethernet RX/TX and scoped IPv6 connectivity; high-rate
-cache behavior; disconnect/reconnect and USBMUX coexistence under load; alternate
+USB trace captures of vendor request/reply contents (UART confirms MAC/NCM
+request success); on-wire IPv6 DAD and peer response; Ethernet RX/TX and scoped
+IPv6 connectivity; high-rate cache behavior; disconnect/reconnect and USBMUX coexistence under load; alternate
 phone models and legacy mode. Host mocks/ELF registration do not establish these.
 
 ## V3 board result and TX diagnosis (2026-11-10)
@@ -158,3 +159,9 @@ phone settings or attributing the errors to pairing.
 Pairing/trust remains external; no pairing changes are part of this diagnosis.
 A DHCP-enabled flag with IPv4 0.0.0.0 does not establish a DHCP service on the
 phone. IPv6 testing must use a known peer address and interface scope.
+
+## Published validation
+
+The initial public main push (`1518ceb`) completed both GitHub Actions host
+matrix jobs (plain and ASan/UBSan):
+https://github.com/boa-z/cherryusb-ipheth/actions/runs/42955915884
