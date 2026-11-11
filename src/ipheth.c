@@ -115,9 +115,9 @@ int ipheth_receive(enum ipheth_rx_mode mode, const uint8_t *p, size_t n,
 }
 int ipheth_transmit(const uint8_t *p, size_t n, uint8_t *out, size_t cap)
 {
-    size_t size = n < 60 ? 60 : n;
-    if (!p || !out || !frame_size(n) || cap < size) return IPHETH_EINVAL;
+    /* Linux 3e65efcca87a matches the Apple driver: submit the actual
+     * Ethernet frame length in both modes, with no USB-level tail padding. */
+    if (!p || !out || !frame_size(n) || cap < n) return IPHETH_EINVAL;
     memmove(out, p, n);
-    memset(out + n, 0, size - n);
-    return (int)size;
+    return (int)n;
 }

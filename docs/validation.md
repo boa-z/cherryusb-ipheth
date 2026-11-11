@@ -9,7 +9,7 @@
 - Protocol tests: descriptor truncation/mutation, non-Apple VID, nonfixed
   interface 7/alternate ordering, MAC/carrier reply variants, legacy limits,
   NCM overlap/truncation/termination/chained-table rejection, 64 KiB boundary,
-  callback failure, TX bounds/padding and 50,000 malformed random inputs.
+  callback failure, TX bounds/exact-length submission and 50,000 malformed random inputs.
 - Class tests: allocation/MAC/NCM/net/thread failure unwind, NCM and legacy
   negotiation, failed/short TX, 20 reconnect cycles, RX/TX STALL recovery,
   concurrent TX during disconnect, two simultaneous devices/slot exhaustion,
@@ -38,19 +38,23 @@ scons --apply-def=d21x_demo128-nand_rt-thread_rtcarplay_defconfig
 scons -j8
 ```
 
-Image:
+The build writes the mutable output path:
 
 ```text
 output/d21x_demo128-nand_rt-thread_rtcarplay/images/d21x_demo128_nand_carplay_page_2k_block_128k_v1.0.0.img
-SHA256 dcb9bb81ad1c226b1d1c2112335adbb0d4a7f2d9cc58aaed013e6fbc887ac3e4
 ```
+
+The preserved v7 artifact below has SHA256
+`dcb9bb81ad1c226b1d1c2112335adbb0d4a7f2d9cc58aaed013e6fbc887ac3e4`.
+Later builds overwrite the output path; do not assume it retains the v7 hash.
 
 The unique v7 diagnostic artifact is
 `/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v7/d213-carplay-ipheth-cherryusb-1.6.1-v7.img`.
 It contains official CherryUSB 1.6.1 at a0054795 and application DMA fix
 `382b293`, plus IPHETH readiness correction and RX diagnostics `1283913`. V7 retains SDK EHCI short-IN correction `88ef9b599` and adds read-only
 controller diagnostics `fa685b04c`. Application `8cc06e0` shortens the console
-network hint. V7 has a complete firmware build and awaits board testing. Both plain and
+network hint. V7 has a complete firmware build and user-supplied controller snapshots,
+interpreted below. Both plain and
 ASan/UBSan host suites passed all three tests with this code. The previous image (SHA256
 starting 5df9aa72) must not be used for this retest.
 
@@ -263,3 +267,33 @@ frame progress, IRQ count and endpoint 86's overlay/qTD remaining bytes. An
 unchanged Active qTD alone cannot distinguish a silent/NAKing device from all
 controller faults; handshake-level conclusions still require a USB capture.
 The unrelated Lockdown/pairing issue remains outside this component.
+
+
+## V7 board evidence and protocol audit
+
+The supplied v7 snapshots show IRQ 36 -> 54, advancing FRAME, working descriptor
+reads and one pending endpoint-86 RX with four Active qTDs, each retaining all
+16384 requested bytes. URB err=-6 means in progress. ELF symbols place bus 1
+QH0 at 4035fd00 and its async head at 40362080: head_link=4035fd02 and
+QH0 link=40362082 form a valid ring. An earlier self-link interpretation was
+incorrect. No RX byte progress or completed short packet is shown. This supports
+checking external activation next, without proving that trust is absent or
+excluding an endpoint-specific DMA/scheduling problem.
+
+The [protocol audit](protocol-audit.md) cross-checks Linux change history,
+FreeBSD, original ipheth-pair, usbmuxd preflight and libimobiledevice. One code
+correction follows Linux 3e65efcca87a: TX preserves the original Ethernet length,
+without adding minimum-60-byte padding, in both modes. Plain and ASan/UBSan CTest
+runs each passed all three tests after the correction; core tests check exact
+length/capacity, unchanged data and a following canary, and class tests check
+42-byte OUT submissions in both modes. A complete D213 firmware build also
+passed. The correction does not affect the historical 70-byte TX timeout or
+explain zero RX before readiness; it has not been tested on the board.
+
+Continue with existing v7 for external activation evidence, using the application
+commands `carplay_usb mux` and, when no working session already exists,
+`carplay_usb pair`, then `ipheth_status` and `usb_ehci_status 1`. Record the
+actual negotiation/session stage and trust dialog behavior. The application's
+later service-start error is distinct from trust/session failure. Keep any
+USBMUX/Lockdown timeout investigation outside this driver. Successful Ethernet
+traffic and reconnect stress remain pending.

@@ -35,6 +35,6 @@ int ipheth_carrier(const uint8_t *, size_t, bool *up);
  * NCM is validated completely before any frames are delivered. */
 int ipheth_receive(enum ipheth_rx_mode, const uint8_t *, size_t,
                    ipheth_frame_fn, void *);
-/* TX is raw Ethernet in both modes; pads short Ethernet frames to 60 bytes. */
+/* TX is raw Ethernet in both modes, at its exact length, without tail padding. */
 int ipheth_transmit(const uint8_t *, size_t, uint8_t *, size_t);
 #endif

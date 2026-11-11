@@ -17,6 +17,7 @@ static atomic_int ncm_stall, tx_failure, tx_short, auto_frame;
 static atomic_int rx_fault, tx_stall, kill_failure;
 static atomic_uint halt_cleared, carrier_requests;
 static atomic_int tx_delay, tx_entered;
+static atomic_uint expected_tx_length = 60;
 static struct usbh_ipheth *bound;
 static struct usbh_urb *pending[2];
 static void *allocate(size_t n)
@@ -91,6 +92,7 @@ int usbh_submit_urb(struct usbh_urb *u)
     assert((uintptr_t)u->transfer_buffer % CONFIG_USB_ALIGN_SIZE == 0);
     if (u->ep->bEndpointAddress == 5) {
         assert(u->timeout == 1000 && !u->complete);
+        assert(u->transfer_buffer_length == atomic_load(&expected_tx_length));
         if (atomic_load(&tx_delay)) { atomic_store(&tx_entered, 1); usb_osal_msleep(80); }
         if (atomic_load(&tx_failure)) return -USB_ERR_IO;
         if (atomic_exchange(&tx_stall, 0)) return -USB_ERR_STALL;
@@ -207,7 +209,9 @@ int main(void)
         assert(atomic_load(&delivered) == before + 1);
         wait_link();
         uint8_t packet[60] = {0};
-        assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
+        atomic_store(&expected_tx_length, 42);
+        assert(!usbh_ipheth_send(bound, packet, 42));
+        atomic_store(&expected_tx_length, 60);
         atomic_store(&tx_failure, 1); assert(usbh_ipheth_send(bound, packet, sizeof(packet)) < 0);
         atomic_store(&tx_failure, 0); atomic_store(&tx_short, 1); assert(usbh_ipheth_send(bound, packet, sizeof(packet)) < 0);
         atomic_store(&tx_short, 0);

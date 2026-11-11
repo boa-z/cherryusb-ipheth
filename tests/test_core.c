@@ -66,11 +66,17 @@ static void framing(void)
     assert(ipheth_receive(IPHETH_LEGACY, legacy, 1517, consume, &frames) < 0);
     for (size_t i = 0; i < 16; i++) assert(ipheth_receive(IPHETH_LEGACY, legacy, i, consume, &frames) < 0);
     assert(ipheth_receive(IPHETH_LEGACY, legacy, 16, reject, NULL) == -19);
-    assert(ipheth_transmit(legacy, 14, out, sizeof(out)) == 60);
-    for (unsigned i = 14; i < 60; i++) assert(out[i] == 0);
+    const size_t sizes[] = {14, 42, 60, 64, 70, 512, 1514};
+    for (unsigned i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        size_t n = sizes[i];
+        memset(out, 0xa5, sizeof(out));
+        assert(ipheth_transmit(legacy, n, out, n) == (int)n);
+        assert(!memcmp(legacy, out, n));
+        if (n < sizeof(out)) assert(out[n] == 0xa5);
+    }
     assert(ipheth_transmit(legacy, 1514, out, sizeof(out)) == 1514);
     assert(ipheth_transmit(legacy, 1515, out, sizeof(out)) < 0);
-    assert(ipheth_transmit(legacy, 14, out, 59) < 0);
+    assert(ipheth_transmit(legacy, 14, out, 13) < 0);
     uint8_t ncm[200] = {0};
     memcpy(ncm, "NCMH", 4); put16(ncm+4, 12); put16(ncm+8, sizeof(ncm)); put16(ncm+10, 12);
     memcpy(ncm+12, "NCM0", 4); put16(ncm+16, 96);

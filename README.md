@@ -10,7 +10,9 @@ negotiation, a carrier-on control reply and a locally valid IPv6 Link-Local addr
 The current driver additionally waits for successful Bulk IN before link-up,
 following Linux IPHETH; early carrier-only link-up in v3/v4 was premature.
 **Ethernet traffic and unplug/replug are not yet validated:** the first attached
-snapshot has RX=0, TX=0 and TX errors. See [validation](docs/validation.md).
+v7 snapshots have RX=0, TX=0 and no first Bulk IN completion. Earlier v3/v4
+snapshots had TX timeouts before the readiness gate was added. See
+[validation](docs/validation.md) and the [protocol audit](docs/protocol-audit.md).
 Pairing/trust is an external prerequisite; this project implements no pairing,
 authentication, application session, or device-wide USB configuration policy.
 

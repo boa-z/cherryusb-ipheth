@@ -30,9 +30,11 @@ Original third-party notices are preserved independently from new-code licensing
 Intentional differences: dynamically discover interface/endpoints/alternate;
 no PID list or assumed interface 2; complete NCM validation before delivery;
 explicit length/overlap/termination checks; per-device resources; cooperative
-shutdown and failed-cancel quarantine. Short Ethernet TX frames are padded to
-60 bytes; unlike FreeBSD's fixed 1514-byte transfers, full-sized padding is not
-required by the current Linux implementation and is not used.
+shutdown and failed-cancel quarantine. TX follows current Linux and the Apple
+driver's observed behavior: submit the original Ethernet length with no added
+trailing padding. FreeBSD's fixed 1514-byte padded TX behavior is not adopted.
+The earlier 60-byte minimum padding was removed after reviewing Linux commit
+3e65efcca87a in the protocol audit.
 
 ## Community search
 
@@ -52,11 +54,11 @@ Repeat the searches before proposing an upstream PR.
 The driver uses the external Class Driver API without a CherryUSB core patch.
 Protocol and RT-Thread code are separate; the core has no hardware or business
 API dependency. Pinned-header tests, sanitizer tests, provenance, porting and
-hardware validation instructions are supplied. The local repository has no
-remote configured and has not been published or pushed.
+hardware validation instructions are supplied. The public repository is https://github.com/boa-z/cherryusb-ipheth; changes are
+committed and pushed with the owner's authorization.
 
 Before upstream submission: obtain actual iPhone RX/TX captures for both modes,
 verify DMA/cache and disconnect stress on the target HCD, confirm multiple phone
 models/configurations, review memory cost and lifetime policy with maintainers,
-and adapt file placement/build style to upstream preference. CI configuration
-is supplied but has not run on GitHub because this repository is local.
+and adapt file placement/build style to upstream preference. The public CI has passed both plain and ASan/UBSan matrix jobs. See
+[protocol-audit.md](protocol-audit.md) for the mechanism audit and evidence limits.
