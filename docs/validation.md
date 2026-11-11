@@ -42,15 +42,15 @@ Image:
 
 ```text
 output/d21x_demo128-nand_rt-thread_rtcarplay/images/d21x_demo128_nand_carplay_page_2k_block_128k_v1.0.0.img
-SHA256 9897fa7d48fbbc07bf4dc19320b2bdf39c79d9f7644bbccbdc8a2744341d3af1
+SHA256 dcb9bb81ad1c226b1d1c2112335adbb0d4a7f2d9cc58aaed013e6fbc887ac3e4
 ```
 
-The unique v6 test artifact is
-`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v6/d213-carplay-ipheth-cherryusb-1.6.1-v6.img`.
+The unique v7 diagnostic artifact is
+`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v7/d213-carplay-ipheth-cherryusb-1.6.1-v7.img`.
 It contains official CherryUSB 1.6.1 at a0054795 and application DMA fix
-`382b293`, plus IPHETH readiness correction and RX diagnostics `1283913`. V6
-adds SDK EHCI short-IN correction `88ef9b599`, has a complete firmware build
-and awaits board testing. Both plain and
+`382b293`, plus IPHETH readiness correction and RX diagnostics `1283913`. V7 retains SDK EHCI short-IN correction `88ef9b599` and adds read-only
+controller diagnostics `fa685b04c`. Application `8cc06e0` shortens the console
+network hint. V7 has a complete firmware build and awaits board testing. Both plain and
 ASan/UBSan host suites passed all three tests with this code. The previous image (SHA256
 starting 5df9aa72) must not be used for this retest.
 
@@ -228,3 +228,38 @@ V6 must still demonstrate real RX completion. Collect the same status snapshots
 and USBMUX status. A successful hardware result is not implied by a software
 reproduction; if completions remain zero, external activation/trust and USB
 traces/controller state remain independent investigation paths.
+
+## V6 board result and V7 read-only controller diagnostics
+
+The v6 UART snapshot remains RX=TX=0, submitted=1 completions=0,
+ready=no/carrier=down, all error counters zero. The HCD short-packet defect is
+reproducible in software, but the correction did not establish successful
+hardware RX. Do not claim it explains this device's outstanding RX or infer
+trust refusal from this status alone.
+
+The portable driver remains unchanged. SDK `fa685b04c` adds FINSH
+`usb_ehci_status [bus]`: read-only register/frame/IRQ and active QH/qTD snapshots,
+bounded to eight descriptors per QH with pool-address validation. It never
+cancels, resubmits, changes alternates, acknowledges IRQs or writes hardware.
+It does invalidate descriptor cache lines for inspection; DMA can still change
+hardware state during capture. Its collector passed original/patched HCD host
+ASan/UBSan tests including unchanged MMIO/tokens, bad pointers, cyclic chains
+and invalid buses. The D213 firmware build and retained FINSH export were
+verified. No new pairing or framing behavior is enabled by v7.
+
+Collect this exact sequence after attachment:
+
+```text
+ipheth_status
+usb_ehci_status 1
+carplay_usb desc
+usb_ehci_status 1
+ipheth_status
+```
+
+The descriptor dump supplies known control traffic between controller snapshots;
+do not add its optional request argument. Compare RUN/async scheduling bits,
+frame progress, IRQ count and endpoint 86's overlay/qTD remaining bytes. An
+unchanged Active qTD alone cannot distinguish a silent/NAKing device from all
+controller faults; handshake-level conclusions still require a USB capture.
+The unrelated Lockdown/pairing issue remains outside this component.
