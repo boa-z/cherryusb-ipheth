@@ -1,0 +1,20 @@
+name: host
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        sanitize: [OFF, ON]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: cherry-embedded/CherryUSB
+          ref: a0054795c44037ace8a2b77b6e610adbff2257ea
+          path: .reference/CherryUSB
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DIPHETH_SANITIZE=${{ matrix.sanitize }} -DCHERRYUSB_ROOT=${{ github.workspace }}/.reference/CherryUSB
+      - run: cmake --build build -j2
+      - run: ctest --test-dir build --output-on-failure
+        env:
+          ASAN_OPTIONS: detect_leaks=1

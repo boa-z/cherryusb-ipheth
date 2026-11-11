@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+import os
+from building import *
+cwd = os.path.dirname(GetCurrentDir())
+source = [os.path.join(cwd, 'src/ipheth.c'),
+          os.path.join(cwd, 'port/cherryusb/usbh_ipheth.c')]
+incs = [os.path.join(cwd, 'include')]
+defines = []
+if GetDepend('RT_USING_LWIP'):
+    source += [os.path.join(cwd, 'port/rtthread/ipheth_rtthread.c')]
+    defines += ['IPHETH_EXTERNAL_NET_ADAPTER']
+# Caller supplies the selected CherryUSB core/common/config include directories.
+group = DefineGroup('cherryusb-ipheth', source, depend=[''], CPPPATH=incs,
+                    CPPDEFINES=defines)
+Return('group')
