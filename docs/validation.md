@@ -42,14 +42,15 @@ Image:
 
 ```text
 output/d21x_demo128-nand_rt-thread_rtcarplay/images/d21x_demo128_nand_carplay_page_2k_block_128k_v1.0.0.img
-SHA256 45f52cc77416cbca797543cc2949bbb0747676d15535a406af3df9c549001a04
+SHA256 c1a36eab89b2494bb17c56e5cda18662c1cb1d3a8d3240844993498417f73c1c
 ```
 
-The unique v4 diagnostic artifact is
-`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v4/d213-carplay-ipheth-cherryusb-1.6.1-v4.img`.
+The unique v5 test artifact is
+`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v5/d213-carplay-ipheth-cherryusb-1.6.1-v5.img`.
 It contains official CherryUSB 1.6.1 at a0054795 and application DMA fix
-`382b293`, plus IPHETH TX diagnostics `1518ceb`. V4 has a complete firmware
-build and awaits board testing. The previous image (SHA256
+`382b293`, plus IPHETH readiness correction and RX diagnostics `1283913`. V5
+has a complete firmware build and awaits board testing. Both plain and
+ASan/UBSan host suites passed all three tests with this code. The previous image (SHA256
 starting 5df9aa72) must not be used for this retest.
 
 The firmware builds with USB1 host and IPv6. The current image's startup says
