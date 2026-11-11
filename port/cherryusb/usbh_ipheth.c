@@ -29,6 +29,9 @@ struct usbh_ipheth {
     usb_osal_mutex_t tx_lock;
     enum ipheth_rx_mode mode;
     int rx_result;
+    uint32_t rx_completed_ms;
+    bool carrier_poll_disabled;
+    struct usbh_ipheth_probe probe;
     void *net;
     struct usbh_ipheth_stats stats;
 };
@@ -82,14 +85,26 @@ static int clear_halt(struct usbh_ipheth *d, struct usb_endpoint_descriptor *ep)
 static void completed(void *arg, int n)
 {
     struct usbh_ipheth *d = arg;
+    size_t f = usb_osal_enter_critical_section();
+    d->rx_completed_ms = usbh_ipheth_now_ms();
     d->rx_result = n;
+    usb_osal_leave_critical_section(f);
     usb_osal_sem_give(d->ready);
+}
+static void latency(struct ipheth_latency *metric, uint32_t elapsed)
+{
+    size_t f = usb_osal_enter_critical_section();
+    ipheth_latency_add(metric, elapsed);
+    usb_osal_leave_critical_section(f);
 }
 static int frame(void *arg, const uint8_t *p, size_t n)
 {
     struct usbh_ipheth *d = arg;
     int rc = usbh_ipheth_net_receive(d->net, p, n);
-    if (!rc) count(&d->stats.rx_frames);
+    if (!rc) {
+        count(&d->stats.rx_frames);
+        count(&d->probe.rx_frames);
+    }
     return rc;
 }
 static void worker(void *arg)
@@ -97,6 +112,8 @@ static void worker(void *arg)
     struct usbh_ipheth *d = arg;
     uint32_t last_carrier = usbh_ipheth_now_ms() - 1000;
     bool pending = false, linked = false, rx_ready = false;
+    bool carrier_queried = false, have_completion = false;
+    uint32_t last_completed = 0;
     while (!stopping(d)) {
         /* Only the worker owns EP0 setup/control storage. TX only raises a
          * recovery flag, so control requests cannot race a receive poll. */
@@ -106,9 +123,17 @@ static void worker(void *arg)
             d->tx_halted = false;
         }
         usb_osal_mutex_give(d->tx_lock);
-        if (rx_ready && (uint32_t)(usbh_ipheth_now_ms() - last_carrier) >= 1000) {
+        size_t probe_flags = usb_osal_enter_critical_section();
+        bool poll_carrier = !d->carrier_poll_disabled;
+        usb_osal_leave_critical_section(probe_flags);
+        if (rx_ready && (!carrier_queried || poll_carrier) &&
+            (uint32_t)(usbh_ipheth_now_ms() - last_carrier) >= 1000) {
             bool up = false;
+            uint32_t started = usbh_ipheth_now_ms();
             int rc = request(d, IPHETH_CMD_CARRIER);
+            latency(&d->probe.carrier, usbh_ipheth_now_ms() - started);
+            count(&d->probe.carrier_calls);
+            carrier_queried = true;
             if (rc > 0) ipheth_carrier(d->dma->ctrl, (size_t)rc, &up);
             else count(&d->stats.usb_errors);
             size_t f = usb_osal_enter_critical_section();
@@ -122,17 +147,28 @@ static void worker(void *arg)
             usbh_bulk_urb_fill(&d->rx, d->hport, &d->in, d->dma->rx,
                 d->mode == IPHETH_NCM ? IPHETH_RX_NCM_MAX : IPHETH_RX_LEGACY_MAX,
                 0, completed, d);
+            uint32_t submit_ms = usbh_ipheth_now_ms();
             if (usbh_submit_urb(&d->rx) < 0) {
                 count(&d->stats.usb_errors);
                 usb_osal_msleep(100);
                 continue;
             }
+            if (have_completion) {
+                latency(&d->probe.rx_rearm, submit_ms - last_completed);
+                have_completion = false;
+            }
             count(&d->stats.rx_submissions);
+            count(&d->probe.rx_submissions);
             pending = true;
         }
         if (usb_osal_sem_take(d->ready, 100) == 0) {
             pending = false;
+            size_t done_flags = usb_osal_enter_critical_section();
+            last_completed = d->rx_completed_ms;
             int rc = d->rx_result;
+            usb_osal_leave_critical_section(done_flags);
+            have_completion = true;
+            latency(&d->probe.rx_wake, usbh_ipheth_now_ms() - last_completed);
             if (rc >= 0 && !stopping(d)) {
                 /* Linux treats even zero-length and 00 01 xx xx control
                  * completions as proof of the receive path becoming ready.
@@ -142,12 +178,16 @@ static void worker(void *arg)
                 size_t f = usb_osal_enter_critical_section();
                 d->stats.rx_ready = rx_ready = true;
                 ++d->stats.rx_completions;
+                ++d->probe.rx_completions;
+                d->probe.rx_bytes += (uint32_t)rc;
                 d->stats.rx_bytes += (uint32_t)rc;
                 d->stats.rx_control_transfers += control;
                 usb_osal_leave_critical_section(f);
+                uint32_t parse_started = usbh_ipheth_now_ms();
                 if (!control && ((uint32_t)rc > d->rx.transfer_buffer_length ||
                     ipheth_receive(d->mode, d->dma->rx, (size_t)rc, frame, d) < 0))
                     count(&d->stats.rx_errors);
+                latency(&d->probe.rx_parse, usbh_ipheth_now_ms() - parse_started);
             } else if (rc < 0) {
                 count(&d->stats.usb_errors);
                 /* Includes STALL: clear halt and reset the endpoint toggle.
@@ -177,7 +217,9 @@ static void worker(void *arg)
 int usbh_ipheth_send(struct usbh_ipheth *d, const uint8_t *p, size_t n)
 {
     if (!d) return IPHETH_ENODEV;
+    uint32_t lock_started = usbh_ipheth_now_ms();
     usb_osal_mutex_take(d->tx_lock);
+    latency(&d->probe.tx_lock, usbh_ipheth_now_ms() - lock_started);
     int rc = IPHETH_ENODEV;
     size_t f = usb_osal_enter_critical_section();
     bool ready = d->stats.rx_ready && d->stats.carrier_up;
@@ -191,7 +233,9 @@ int usbh_ipheth_send(struct usbh_ipheth *d, const uint8_t *p, size_t n)
             unsigned length = (unsigned)rc;
             usbh_bulk_urb_fill(&d->tx, d->hport, &d->out, d->dma->tx,
                                length, 1000, NULL, NULL);
+            uint32_t tx_started = usbh_ipheth_now_ms();
             rc = usbh_submit_urb(&d->tx);
+            latency(&d->probe.tx_urb, usbh_ipheth_now_ms() - tx_started);
             actual = d->tx.actual_length;
             submit_error = rc < 0;
             if (rc == -USB_ERR_STALL) d->tx_halted = true;
@@ -217,6 +261,26 @@ int usbh_ipheth_send(struct usbh_ipheth *d, const uint8_t *p, size_t n)
     }
     usb_osal_mutex_give(d->tx_lock);
     return rc;
+}
+void usbh_ipheth_set_carrier_poll(struct usbh_ipheth *d, bool enabled)
+{
+    if (!d) return;
+    size_t f = usb_osal_enter_critical_section();
+    d->carrier_poll_disabled = !enabled;
+    usb_osal_leave_critical_section(f);
+}
+void usbh_ipheth_take_probe(struct usbh_ipheth *d, struct usbh_ipheth_probe *p)
+{
+    if (!d || !p) return;
+    size_t f = usb_osal_enter_critical_section();
+    *p = d->probe;
+    p->carrier_poll = !d->carrier_poll_disabled;
+    /* Errors use interval deltas in the RT-Thread reporter. */
+    p->tx_errors = d->stats.tx_errors;
+    p->rx_errors = d->stats.rx_errors;
+    p->usb_errors = d->stats.usb_errors;
+    memset(&d->probe, 0, sizeof(d->probe));
+    usb_osal_leave_critical_section(f);
 }
 void usbh_ipheth_get_stats(struct usbh_ipheth *d, struct usbh_ipheth_stats *s)
 {

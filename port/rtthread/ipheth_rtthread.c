@@ -15,6 +15,8 @@ struct ipheth_net {
     struct usbh_ipheth *usb;
     uint8_t mac[6];
     uint8_t tx[IPHETH_FRAME_MAX];
+    uint32_t probe_ms;
+    uint32_t probe_tx_errors, probe_rx_errors, probe_usb_errors;
 };
 static struct ipheth_net nets[CONFIG_USBHOST_IPHETH_MAX_DEVICES];
 uint32_t usbh_ipheth_now_ms(void)
@@ -89,6 +91,8 @@ void *usbh_ipheth_net_attach(struct usbh_ipheth *usb, const uint8_t mac[6])
     if (netifapi_netif_common(n->eth.netif, reset_address, NULL) != ERR_OK) goto fail;
     rt_mutex_take(&n->lock, RT_WAITING_FOREVER);
     n->usb = usb;
+    n->probe_ms = usbh_ipheth_now_ms();
+    n->probe_tx_errors = n->probe_rx_errors = n->probe_usb_errors = 0;
     rt_mutex_release(&n->lock);
     return n;
 fail:
@@ -118,8 +122,70 @@ int usbh_ipheth_net_receive(void *net, const uint8_t *frame, size_t length)
     if (n->eth.netif->input(p, n->eth.netif) != ERR_OK) { pbuf_free(p); return IPHETH_EIO; }
     return 0;
 }
+/* The application calls this from a low-priority worker. No UART output in
+ * the USB RX worker, TCP/IP core, ISR, or while holding the network lock. */
+static unsigned p95(const struct ipheth_latency *m)
+{
+    static const unsigned limits[] = {0, 1, 4, 16, 64, 256, 1000};
+    uint32_t at = 0, target = (uint32_t)(((uint64_t)m->count * 95 + 99) / 100);
+    if (!target) return 0;
+    for (unsigned i = 0; i < 8; ++i) {
+        at += m->bins[i];
+        if (at >= target) return i == 7 ? m->max_ms : limits[i];
+    }
+    return 0;
+}
+static void print_latency(const char *name, const struct ipheth_latency *m)
+{
+    rt_kprintf("[ipheth-time] %s n=%u avg=%u p95_upper=%u max=%u ms\n", name, m->count,
+        m->count ? m->total_ms / m->count : 0, p95(m), m->max_ms);
+}
+void ipheth_performance_report(void)
+{
+    for (unsigned i = 0; i < CONFIG_USBHOST_IPHETH_MAX_DEVICES; ++i) {
+        struct ipheth_net *n = &nets[i];
+        if (!n->initialized || rt_mutex_take(&n->lock, RT_WAITING_NO) != RT_EOK) continue;
+        uint32_t now = usbh_ipheth_now_ms(), dt = now - n->probe_ms;
+        if (!n->usb || dt < 5000) { rt_mutex_release(&n->lock); continue; }
+        struct usbh_ipheth_probe p;
+        usbh_ipheth_take_probe(n->usb, &p);
+        unsigned txerr = p.tx_errors - n->probe_tx_errors;
+        unsigned rxerr = p.rx_errors - n->probe_rx_errors;
+        unsigned usberr = p.usb_errors - n->probe_usb_errors;
+        n->probe_ms = now; n->probe_tx_errors = p.tx_errors;
+        n->probe_rx_errors = p.rx_errors; n->probe_usb_errors = p.usb_errors;
+        rt_mutex_release(&n->lock);
+        rt_kprintf("[ipheth-perf] i%u dt=%ums carrier_poll=%u submit=%u complete=%u\n",
+            i, dt, p.carrier_poll, p.rx_submissions, p.rx_completions);
+        rt_kprintf("[ipheth-perf] frames=%u bytes=%u errors_rx/tx/usb=%u/%u/%u\n",
+            p.rx_frames, p.rx_bytes, rxerr, txerr, usberr);
+        print_latency("carrier", &p.carrier); print_latency("wake", &p.rx_wake);
+        print_latency("rearm", &p.rx_rearm); print_latency("parse", &p.rx_parse);
+        print_latency("tx_lock", &p.tx_lock); print_latency("tx_urb", &p.tx_urb);
+    }
+}
 #ifdef RT_USING_FINSH
 #include <finsh.h>
+/* Only changes periodic carrier queries after the initial query. No forced
+ * link-up, shorter timeout, second URB, or lifetime/locking changes. */
+static void ipheth_probe(int argc, char **argv)
+{
+    if (argc != 3 || strcmp(argv[1], "carrier") ||
+        (strcmp(argv[2], "on") && strcmp(argv[2], "off"))) {
+        rt_kprintf("ipheth_probe carrier on|off (diagnostic; reconnect restores on)\n");
+        return;
+    }
+    bool enabled = !strcmp(argv[2], "on");
+    for (unsigned i = 0; i < CONFIG_USBHOST_IPHETH_MAX_DEVICES; ++i) {
+        struct ipheth_net *n = &nets[i];
+        if (!n->initialized) continue;
+        rt_mutex_take(&n->lock, RT_WAITING_FOREVER);
+        if (n->usb) usbh_ipheth_set_carrier_poll(n->usb, enabled);
+        rt_mutex_release(&n->lock);
+    }
+    rt_kprintf("[ipheth-probe] periodic carrier %s; initial query retained\n", enabled ? "on" : "off");
+}
+MSH_CMD_EXPORT(ipheth_probe, Apple Ethernet single variable carrier experiment);
 static void ipheth_status(void)
 {
     for (unsigned i = 0; i < CONFIG_USBHOST_IPHETH_MAX_DEVICES; i++) {

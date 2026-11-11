@@ -16,7 +16,7 @@ static atomic_int fail_alloc, fail_thread, reject_attach, fail_cmd, mac_short;
 static atomic_int ncm_stall, tx_failure, tx_short, auto_frame;
 static atomic_int rx_fault, tx_stall, kill_failure;
 static atomic_uint halt_cleared, carrier_requests;
-static atomic_int tx_delay, tx_entered;
+static atomic_int tx_delay, tx_entered, carrier_delay, carrier_entered;
 static atomic_uint expected_tx_length = 60;
 static struct usbh_ipheth *bound;
 static struct usbh_urb *pending[2];
@@ -84,7 +84,12 @@ int usbh_control_transfer(struct usbh_hubport *h, struct usb_setup_packet *s, ui
         uint8_t mac[] = {2,3,4,5,6,7}; memcpy(p, mac, 6);
         return atomic_load(&mac_short) ? 5 : 6;
     }
-    assert(s->bRequest == IPHETH_CMD_CARRIER); carrier_requests++; p[0] = 4; return 1;
+    assert(s->bRequest == IPHETH_CMD_CARRIER); carrier_requests++;
+    if (atomic_load(&carrier_delay)) {
+        atomic_store(&carrier_entered, 1);
+        usb_osal_msleep((uint32_t)atomic_load(&carrier_delay));
+    }
+    p[0] = 4; return 1;
 }
 static void put16(uint8_t *p, unsigned n) { p[0] = (uint8_t)n; p[1] = (uint8_t)(n >> 8); }
 int usbh_submit_urb(struct usbh_urb *u)
@@ -239,11 +244,50 @@ int main(void)
     assert(atomic_load(&halt_cleared) == 2);
     assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
     assert(!c->disconnect(&h, 2));
+    /* Actual worker: a delayed periodic Carrier request postpones servicing
+     * an independently completed RX URB. No change to completion ownership. */
+    atomic_store(&auto_frame, 1);
+    assert(!c->connect(&h, 2)); wait_link();
+    struct usbh_ipheth_probe probe;
+    usbh_ipheth_take_probe(bound, &probe);
+    atomic_store(&carrier_delay, 120); atomic_store(&carrier_entered, 0);
+    for (unsigned i = 0; i < 1800 && !atomic_load(&carrier_entered); ++i) usb_osal_msleep(1);
+    assert(atomic_load(&carrier_entered));
+    struct usbh_ipheth_stats baseline; usbh_ipheth_get_stats(bound, &baseline);
+    complete_pending(0);
+    for (unsigned i = 0; i < 500; ++i) {
+        struct usbh_ipheth_stats current; usbh_ipheth_get_stats(bound, &current);
+        if (current.rx_submissions > baseline.rx_submissions) break;
+        usb_osal_msleep(1);
+    }
+    usbh_ipheth_take_probe(bound, &probe);
+    assert(probe.carrier.max_ms >= 100 && probe.rx_wake.max_ms >= 50);
+    assert(probe.rx_rearm.max_ms >= 50);
+    atomic_store(&carrier_delay, 0);
+    usbh_ipheth_set_carrier_poll(bound, false);
+    unsigned polls_before = atomic_load(&carrier_requests);
+    usb_osal_msleep(1150);
+    assert(atomic_load(&carrier_requests) == polls_before);
+    usbh_ipheth_take_probe(bound, &probe);
+    assert(!probe.carrier_poll && !probe.carrier.count);
+    usbh_ipheth_set_carrier_poll(bound, true);
+    for (unsigned i = 0; i < 500 && atomic_load(&carrier_requests) == polls_before; ++i) usb_osal_msleep(1);
+    assert(atomic_load(&carrier_requests) > polls_before);
+    atomic_store(&tx_delay, 1);
+    assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
+    usbh_ipheth_take_probe(bound, &probe);
+    assert(probe.tx_urb.count == 1 && probe.tx_urb.max_ms >= 50);
+    assert(probe.tx_urb.bins[5] == 1 && probe.carrier_poll);
+    usbh_ipheth_take_probe(bound, &probe);
+    assert(!probe.tx_urb.count && !probe.rx_rearm.count); /* window reset */
+    atomic_store(&tx_delay, 0);
+    assert(!c->disconnect(&h, 2));
+    puts("probe test: 120ms Carrier delays RX wake/rearm; polling off/on; slow synchronous TX; window reset");
     /* Disconnect must drain an already running synchronous TX before any
      * mutex/URB storage can be released. */
     atomic_store(&auto_frame, 1);
     assert(!c->connect(&h, 2)); wait_link();
-    atomic_store(&tx_delay, 1);
+    atomic_store(&tx_delay, 1); atomic_store(&tx_entered, 0);
     pthread_t sender; assert(!pthread_create(&sender, NULL, concurrent_send, bound));
     for (unsigned i = 0; i < 200 && !atomic_load(&tx_entered); i++) usb_osal_msleep(1);
     assert(atomic_load(&tx_entered));
