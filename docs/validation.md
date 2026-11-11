@@ -50,6 +50,28 @@ status before/after removal, reactivate externally as needed, and check for a
 single reused i0, restored traffic and no stale callbacks or resource growth.
 No automatic pairing persistence or reconnection activation is claimed.
 
+## Additional v13 board result: gateway ICMP succeeds
+
+A later supplied UART run receives all four gateway ping replies from
+172.20.10.1, with TTL 64 and RTTs 2, 1, 1 and 1 ms. Subsequent status is
+RX=85, TX=16, rxerr=4, txerr=0, usberr=0; 70 completed USB receives contain
+52279 bytes and the interface remains ready/carrier-up with a valid local
+IPv6 address. NCM can contain multiple frames per completion, so RX=85 versus
+70 USB completions is not itself inconsistent.
+
+The earlier snapshot had rxerr=1, but this run uses USB address 4 versus the
+earlier address 2 and has different counters. These snapshots must not be
+assumed to be one continuous counter interval. The four errors need separate
+parser/length/network-delivery diagnostics; they do not prove USB transfer
+failure or rule out dropped datagrams. Capture consecutive status snapshots
+on one attachment while pinging to determine whether errors keep increasing.
+
+The application reports paired=1 and complete StartSession/StartService
+replies, but fails with timeout at the later service stage. The portable
+Ethernet interface remains usable and gateway ping succeeds despite that
+application failure. This is further evidence that service readiness and
+Ethernet readiness require separate status and recovery policies.
+
 ## Automated results (2026-11-10)
 
 - CMake/CTest Debug: protocol, class lifecycle and actual upstream EP0 tests passed.
