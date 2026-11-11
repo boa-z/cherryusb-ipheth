@@ -161,17 +161,36 @@ int usbh_ipheth_send(struct usbh_ipheth *d, const uint8_t *p, size_t n)
     usb_osal_mutex_take(d->tx_lock);
     int rc = IPHETH_ENODEV;
     if (!stopping(d) && !d->tx_halted) {
+        unsigned actual = 0;
+        bool invalid = false, submit_error = false, short_transfer = false;
         rc = ipheth_transmit(p, n, d->dma->tx, sizeof(d->dma->tx));
         if (rc > 0) {
             unsigned length = (unsigned)rc;
             usbh_bulk_urb_fill(&d->tx, d->hport, &d->out, d->dma->tx,
                                length, 1000, NULL, NULL);
             rc = usbh_submit_urb(&d->tx);
+            actual = d->tx.actual_length;
+            submit_error = rc < 0;
             if (rc == -USB_ERR_STALL) d->tx_halted = true;
-            if (!rc && d->tx.actual_length != length) rc = IPHETH_EIO;
-            if (!rc) count(&d->stats.tx_frames);
+            if (!rc && actual != length) {
+                rc = IPHETH_EIO;
+                short_transfer = true;
+            }
+        } else {
+            invalid = true;
         }
-        if (rc < 0) count(&d->stats.tx_errors);
+        size_t f = usb_osal_enter_critical_section();
+        if (!rc) ++d->stats.tx_frames;
+        if (rc < 0) {
+            ++d->stats.tx_errors;
+            d->stats.tx_invalid_frames += invalid;
+            d->stats.tx_submit_errors += submit_error;
+            d->stats.tx_short_transfers += short_transfer;
+            d->stats.last_tx_result = rc;
+            d->stats.last_tx_length = n > UINT32_MAX ? UINT32_MAX : (uint32_t)n;
+            d->stats.last_tx_actual = actual;
+        }
+        usb_osal_leave_critical_section(f);
     }
     usb_osal_mutex_give(d->tx_lock);
     return rc;
@@ -285,7 +304,7 @@ static int disconnect(struct usbh_hubport *h, uint8_t slot)
 static const struct usbh_class_driver driver = {
     .driver_name = "ipheth", .connect = connect, .disconnect = disconnect
 };
-/* CherryUSB 1.5 has only a combined VID/PID table match. Match the exact
+/* The class table has a combined VID/PID match. Match the exact
  * interface triplet here, then validate Apple VID in connect (all PIDs). */
 CLASS_INFO_DEFINE const struct usbh_class_info ipheth_class_info = {
     .match_flags = USB_CLASS_MATCH_INTF_CLASS | USB_CLASS_MATCH_INTF_SUBCLASS | USB_CLASS_MATCH_INTF_PROTOCOL,

@@ -5,7 +5,10 @@ core is C99 and independent of USB libraries, operating systems, and network
 stacks. The included network adapter targets RT-Thread with lwIP 2.x.
 
 This is an initial implementation, with host tests and D213 cross-builds.
-**Physical iPhone traffic and unplug/replug have not yet been validated.**
+D213 board logs confirm composite USBMUX/IPHETH binding, MAC retrieval, NCM RX
+negotiation, carrier up and a locally valid IPv6 Link-Local address.
+**Ethernet traffic and unplug/replug are not yet validated:** the first attached
+snapshot has RX=0, TX=0 and TX errors. See [validation](docs/validation.md).
 Pairing/trust is an external prerequisite; this project implements no pairing,
 authentication, application session, or device-wide USB configuration policy.
 

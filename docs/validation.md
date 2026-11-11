@@ -131,3 +131,30 @@ Actual vendor request/reply captures; chosen NCM vs legacy mode; valid MAC;
 carrier and IPv6 DAD; Ethernet RX/TX and scoped IPv6 connectivity; high-rate
 cache behavior; disconnect/reconnect and USBMUX coexistence under load; alternate
 phone models and legacy mode. Host mocks/ELF registration do not establish these.
+
+## V3 board result and TX diagnosis (2026-11-10)
+
+User-supplied UART logs from the v3 image confirm:
+
+- Configuration index 3/value 4 selected; USBMUX attaches on interface 1 and
+  remains attached while IPHETH binds interface 2, alternate 1, IN86/OUT05.
+- GET_MAC returns 6 data bytes and ENABLE_NCM returns 0; NCM RX selected.
+- RT-Thread i0 registers, carrier is UP, and lwIP reports its Link-Local
+  address VALID. This local state alone does not prove peer reachability or
+  that DAD packets were transmitted successfully.
+- Snapshot: RX=0 TX=0 rxerr=0 txerr=10 usberr=0. No successful Ethernet frame
+  transfer is yet demonstrated. The existing usb_errors counter covers the
+  receive/worker control path, not TX submission failures.
+
+New `ipheth_status` TX diagnostics distinguish `frame` (protocol validation),
+`submit` (negative HCD return) and `short` (success with an unexpected OUT
+length). `last` is the last failed result, `length` the original Ethernet
+length, and `actual` the HCD OUT length. Last failure details persist after
+successful traffic. Error number meanings depend on the category: protocol
+errors and CherryUSB errors use separate namespaces. Host tests assert each
+category. Collect two status snapshots five seconds apart before modifying
+phone settings or attributing the errors to pairing.
+
+Pairing/trust remains external; no pairing changes are part of this diagnosis.
+A DHCP-enabled flag with IPv4 0.0.0.0 does not establish a DHCP service on the
+phone. IPv6 testing must use a known peer address and interface scope.

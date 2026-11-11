@@ -14,11 +14,11 @@ Recognized Apple Ethernet initialization failures now leave the class inactive
 and retain other composite interfaces, with a diagnostic identifying the step.
 Replug after fixing the prerequisite to retry initialization.
 
-The D213 RT-Thread/lwIP 2.1.2 adapter has a complete SDK cross-build. No physical
-iPhone is currently validated by this repository. Host mocks are not evidence
+The D213 RT-Thread/lwIP 2.1.2 adapter has a complete SDK cross-build. Board logs validate binding and local network-interface setup for the supplied
+iPhone; end-to-end traffic is not yet validated. Host mocks are not evidence
 of on-device transfer, successful trust or correct hardware cache behavior.
 
-Provided board observation (external evidence, pending driver validation):
+Provided board observations (external UART evidence):
 
 - D213 USB1 host, iPhone VID/PID 05ac:12a8.
 - Configuration value 4, descriptor index 3.

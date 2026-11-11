@@ -188,6 +188,11 @@ int main(void)
         atomic_store(&tx_short, 0);
         struct usbh_ipheth_stats s; usbh_ipheth_get_stats(bound, &s);
         assert(s.rx_frames == 1 && s.tx_frames == 1 && s.tx_errors == 2);
+        assert(s.tx_submit_errors == 1 && s.tx_short_transfers == 1 && !s.tx_invalid_frames);
+        assert(s.last_tx_result == IPHETH_EIO && s.last_tx_length == 60 && s.last_tx_actual == 59);
+        assert(usbh_ipheth_send(bound, packet, 13) == IPHETH_EINVAL);
+        usbh_ipheth_get_stats(bound, &s);
+        assert(s.tx_errors == 3 && s.tx_invalid_frames == 1 && s.last_tx_length == 13);
         assert(!c->disconnect(&h, 2)); assert(!c->disconnect(&h, 2));
         assert(!h.config.intf[2].priv && h.config.intf[1].priv == (void *)0x1234);
         assert(!atomic_load(&live_resources));

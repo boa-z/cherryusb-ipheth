@@ -8,6 +8,12 @@
 struct usbh_ipheth;
 struct usbh_ipheth_stats {
     uint32_t rx_frames, tx_frames, rx_errors, tx_errors, usb_errors;
+    /* TX diagnostics distinguish framing rejection, HCD failure and short OUT.
+     * Last fields describe the last failed attempt and persist after success.
+     * last_tx_result is IPHETH_EINVAL/EIO or the negative HCD result. */
+    uint32_t tx_invalid_frames, tx_submit_errors, tx_short_transfers;
+    int last_tx_result;
+    uint32_t last_tx_length, last_tx_actual;
 };
 /* Callbacks run in thread context. attach/detach run in the hub thread;
  * receive/link run in the device worker. No callback may retain frame views.
