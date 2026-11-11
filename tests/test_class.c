@@ -15,7 +15,7 @@ static atomic_uint attached, detached, delivered, killed, live_resources;
 static atomic_int fail_alloc, fail_thread, reject_attach, fail_cmd, mac_short;
 static atomic_int ncm_stall, tx_failure, tx_short, auto_frame;
 static atomic_int rx_fault, tx_stall, kill_failure;
-static atomic_uint halt_cleared;
+static atomic_uint halt_cleared, carrier_requests;
 static atomic_int tx_delay, tx_entered;
 static struct usbh_ipheth *bound;
 static struct usbh_urb *pending[2];
@@ -83,7 +83,7 @@ int usbh_control_transfer(struct usbh_hubport *h, struct usb_setup_packet *s, ui
         uint8_t mac[] = {2,3,4,5,6,7}; memcpy(p, mac, 6);
         return atomic_load(&mac_short) ? 5 : 6;
     }
-    assert(s->bRequest == IPHETH_CMD_CARRIER); p[0] = 4; return 1;
+    assert(s->bRequest == IPHETH_CMD_CARRIER); carrier_requests++; p[0] = 4; return 1;
 }
 static void put16(uint8_t *p, unsigned n) { p[0] = (uint8_t)n; p[1] = (uint8_t)(n >> 8); }
 int usbh_submit_urb(struct usbh_urb *u)
@@ -160,6 +160,30 @@ static void *concurrent_send(void *arg)
     assert(!usbh_ipheth_send(arg, packet, sizeof(packet)));
     return NULL;
 }
+static void wait_link(void)
+{
+    for (unsigned i = 0; i < 500; i++) {
+        struct usbh_ipheth_stats s; usbh_ipheth_get_stats(bound, &s);
+        if (s.carrier_up) return;
+        usb_osal_msleep(1);
+    }
+    assert(!"carrier did not become ready");
+}
+static void complete_pending(int length)
+{
+    struct usbh_urb *u = NULL;
+    for (unsigned retry = 0; retry < 500 && !u; retry++) {
+        size_t f = usb_osal_enter_critical_section();
+        for (unsigned i = 0; i < 2; i++) if (pending[i]) {
+            u = pending[i]; pending[i] = NULL; u->hcpriv = NULL; break;
+        }
+        usb_osal_leave_critical_section(f);
+        if (!u) usb_osal_msleep(1);
+    }
+    assert(u);
+    if (length == 4) { u->transfer_buffer[0] = 0; u->transfer_buffer[1] = 1; }
+    u->complete(u->arg, length);
+}
 int main(void)
 {
     const struct usbh_class_driver *c = ipheth_class_info.class_driver;
@@ -181,6 +205,7 @@ int main(void)
         assert(!c->connect(&h, 2));
         for (unsigned wait = 0; wait < 100 && atomic_load(&delivered) == before; wait++) usb_osal_msleep(1);
         assert(atomic_load(&delivered) == before + 1);
+        wait_link();
         uint8_t packet[60] = {0};
         assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
         atomic_store(&tx_failure, 1); assert(usbh_ipheth_send(bound, packet, sizeof(packet)) < 0);
@@ -199,10 +224,11 @@ int main(void)
     }
     assert(atomic_load(&killed) == 20);
     /* STALL recovery uses the worker's private EP0 and resets the toggle. */
-    atomic_store(&rx_fault, 1);
+    atomic_store(&rx_fault, 1); atomic_store(&auto_frame, 1);
     assert(!c->connect(&h, 2));
     for (unsigned i = 0; i < 200 && !atomic_load(&halt_cleared); i++) usb_osal_msleep(1);
     assert(atomic_load(&halt_cleared) == 1);
+    wait_link();
     atomic_store(&tx_stall, 1); uint8_t packet[60] = {0};
     assert(usbh_ipheth_send(bound, packet, sizeof(packet)) < 0);
     for (unsigned i = 0; i < 300 && atomic_load(&halt_cleared) < 2; i++) usb_osal_msleep(1);
@@ -211,7 +237,8 @@ int main(void)
     assert(!c->disconnect(&h, 2));
     /* Disconnect must drain an already running synchronous TX before any
      * mutex/URB storage can be released. */
-    assert(!c->connect(&h, 2));
+    atomic_store(&auto_frame, 1);
+    assert(!c->connect(&h, 2)); wait_link();
     atomic_store(&tx_delay, 1);
     pthread_t sender; assert(!pthread_create(&sender, NULL, concurrent_send, bound));
     for (unsigned i = 0; i < 200 && !atomic_load(&tx_entered); i++) usb_osal_msleep(1);
@@ -219,6 +246,25 @@ int main(void)
     assert(!c->disconnect(&h, 2)); assert(!pthread_join(sender, NULL));
     atomic_store(&tx_delay, 0);
     assert(!atomic_load(&live_resources));
+    /* Carrier control alone must not authorize TX before Bulk IN is ready.
+     * Zero-length and Apple control completions unlock readiness without
+     * being misparsed/delivered as Ethernet frames. Reconnect resets it. */
+    for (unsigned cycle = 0; cycle < 2; cycle++) {
+        unsigned polls = atomic_load(&carrier_requests), frames = atomic_load(&delivered);
+        assert(!c->connect(&h, 2)); usb_osal_msleep(10);
+        struct usbh_ipheth_stats s; usbh_ipheth_get_stats(bound, &s);
+        assert(!s.rx_ready && !s.carrier_up && !s.rx_completions);
+        assert(atomic_load(&carrier_requests) == polls);
+        assert(usbh_ipheth_send(bound, packet, sizeof(packet)) == IPHETH_ENODEV);
+        usbh_ipheth_get_stats(bound, &s);
+        assert(s.tx_deferred == 1 && !s.tx_errors && !s.tx_frames);
+        complete_pending(cycle ? 4 : 0); wait_link();
+        usbh_ipheth_get_stats(bound, &s);
+        assert(s.rx_ready && s.rx_completions == 1 && s.rx_control_transfers == 1);
+        assert(!s.rx_errors && atomic_load(&delivered) == frames);
+        assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
+        assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+    }
     /* Distinct hports have independent slots/URBs; exhaustion is harmless. */
     struct usbh_hubport h2, h3; init(&h2); init(&h3);
     assert(!c->connect(&h, 2)); assert(!c->connect(&h2, 2));

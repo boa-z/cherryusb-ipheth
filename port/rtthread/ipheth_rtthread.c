@@ -132,6 +132,9 @@ static void ipheth_status(void)
             i, n->usb ? "attached" : "detached", n->mac[0], n->mac[1], n->mac[2],
             n->mac[3], n->mac[4], n->mac[5], s.rx_frames, s.tx_frames,
             s.rx_errors, s.tx_errors, s.usb_errors);
+        rt_kprintf("  USB RX: submitted=%u completions=%u bytes=%u control=%u ready=%s carrier=%s deferred=%u\n",
+            s.rx_submissions, s.rx_completions, s.rx_bytes, s.rx_control_transfers,
+            s.rx_ready ? "yes" : "no", s.carrier_up ? "up" : "down", s.tx_deferred);
         rt_kprintf("  TX failures: frame=%u submit=%u short=%u last=%d length=%u actual=%u\n",
             s.tx_invalid_frames, s.tx_submit_errors, s.tx_short_transfers,
             s.last_tx_result, s.last_tx_length, s.last_tx_actual);

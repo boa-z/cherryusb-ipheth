@@ -5,7 +5,7 @@ repository contains no complete USB stack or operating-system fork.
 
 | Reference | Revision inspected | What it established |
 | --- | --- | --- |
-| [Linux ipheth.c](https://github.com/torvalds/linux/blob/067c5c24cef23d913b67eaaf71ae67e7169a6620/drivers/net/usb/ipheth.c) | Linux master HEAD recorded as `067c5c24cef23d913b67eaaf71ae67e7169a6620` | ff/fd/01, vendor commands 00/04/45, legacy RX prefix, Apple NCM RX only, raw TX, two carrier reply variants |
+| [Linux ipheth.c](https://github.com/torvalds/linux/blob/067c5c24cef23d913b67eaaf71ae67e7169a6620/drivers/net/usb/ipheth.c) | Linux master HEAD recorded as `067c5c24cef23d913b67eaaf71ae67e7169a6620` | ff/fd/01, vendor commands 00/04/45, legacy RX prefix, Apple NCM RX only, raw TX, two carrier reply variants, first-successful-RX readiness before carrier/TX, empty/control RX filtering |
 | [FreeBSD if_ipheth.c](https://github.com/freebsd/freebsd-src/blob/2d5a6bc2a4c5eb061f8d63b7aaff7dc04e96f1ea/sys/dev/usb/net/if_ipheth.c) | main HEAD recorded as `2d5a6bc2a4c5eb061f8d63b7aaff7dc04e96f1ea` | Request index from discovered interface, alternate setting, independent Ethernet attachment, packet validation |
 | [CherryUSB](https://github.com/cherry-embedded/CherryUSB/tree/a0054795c44037ace8a2b77b6e610adbff2257ea) | `a0054795c44037ace8a2b77b6e610adbff2257ea` | External class API, URBs, OSAL, section registration |
 | [Luban-Lite SDK](https://github.com/jiachenin/luban-lite-jc) | local `poc/carplay-oss`, base `d14f4803d` | Original vendor 1.5 control-return mismatch; upgraded to official a0054795 with separate SDK overlay, RT-Thread/lwIP 2.1.2, class KEEP and SCons integration |

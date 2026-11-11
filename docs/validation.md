@@ -165,3 +165,34 @@ phone. IPv6 testing must use a known peer address and interface scope.
 The initial public main push (`1518ceb`) completed both GitHub Actions host
 matrix jobs (plain and ASan/UBSan):
 https://github.com/boa-z/cherryusb-ipheth/actions/runs/42955915884
+
+## V4 board result and first-RX readiness correction
+
+The v4 UART snapshot has RX=0 TX=0 txerr=12, with frame=0 submit=12
+short=0 last=-14 length=70 actual=0. In the pinned official CherryUSB,
+-14 is USB_ERR_TIMEOUT. Since the adapter uses synchronous TX submission,
+this is a completion wait timeout, not descriptor validation or a short OUT.
+This does not prove whether the device NAKed, external trust is missing, or
+controller scheduling/completion is at fault; no USB trace is available.
+
+Rechecking Linux ipheth shows that confirmed_pairing is set after the first
+successful Bulk IN completion (including empty/control transfers), and carrier
+checks are skipped until then. This driver previously missed that readiness
+gate and allowed lwIP to transmit based on a carrier-on reply alone. V5 adopts
+the Linux behavior, filters empty and four-byte 00 01 xx xx control transfers,
+and exposes Bulk IN submission/success/byte/control counters and RX readiness.
+TX before readiness/carrier-up is rejected locally and counted as deferred.
+This corrects premature link-up; it does not establish the cause of the phone's
+lack of received data or claim that pairing/USB traffic is now fixed.
+
+Tests cover carrier polling suppression before RX, local TX deferral without
+USB errors, empty/control completion readiness, no false Ethernet delivery or
+parse error, link-up after readiness, and reconnect state reset. Prior TX,
+STALL, concurrent unplug and quarantine cases remain enabled.
+
+On the next board run collect `ipheth_status`, `ifconfig` and `carplay_usb net`
+after attach and again five seconds later. With no Bulk IN completion, the
+expected state is ready=no, carrier=down and no IPHETH Bulk OUT submissions.
+Local Link-Local VALID alone continues to be insufficient evidence of traffic.
+If readiness remains absent, investigate external trust and controller/USB
+captures independently; do not add pairing protocols to the Ethernet driver.

@@ -14,6 +14,10 @@ struct usbh_ipheth_stats {
     uint32_t tx_invalid_frames, tx_submit_errors, tx_short_transfers;
     int last_tx_result;
     uint32_t last_tx_length, last_tx_actual;
+    uint32_t rx_submissions, rx_completions, rx_bytes, rx_control_transfers, tx_deferred;
+    /* A successful Bulk IN completion (including empty/control transfers)
+     * establishes readiness, following Linux ipheth; no pairing protocol. */
+    bool rx_ready, carrier_up;
 };
 /* Callbacks run in thread context. attach/detach run in the hub thread;
  * receive/link run in the device worker. No callback may retain frame views.

@@ -19,8 +19,14 @@ that shared EP0 mutex. USBMUX retains its own interface, private data and URBs.
 
 A device worker submits asynchronous RX and receives completion through a
 semaphore; callbacks only publish results, never resubmit or touch the stack.
-The worker copies frames through the network adapter and polls carrier once a
-second using a wrapping monotonic clock. USB faults retry with backoff; RX
+The worker copies frames through the network adapter. Like Linux IPHETH, it
+waits for the first successful Bulk IN completion before polling carrier and
+publishing link-up. Successful empty transfers and four-byte 00 01 xx xx
+control notifications establish readiness but deliver no Ethernet frame.
+Carrier is then polled once a second using a wrapping monotonic clock. Sends
+before RX readiness/carrier-up return ENODEV and increment tx_deferred without
+submitting USB traffic. This observes data-path readiness; it implements no
+pairing/trust protocol. Reconnect resets the readiness state. USB faults retry with backoff; RX
 STALL clears the halt and resets the RX toggle. TX is synchronous with a 1 s
 timeout and a private mutex; TX STALL recovery is delegated to the worker.
 

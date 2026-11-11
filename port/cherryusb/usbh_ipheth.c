@@ -96,7 +96,7 @@ static void worker(void *arg)
 {
     struct usbh_ipheth *d = arg;
     uint32_t last_carrier = usbh_ipheth_now_ms() - 1000;
-    bool pending = false, linked = false;
+    bool pending = false, linked = false, rx_ready = false;
     while (!stopping(d)) {
         /* Only the worker owns EP0 setup/control storage. TX only raises a
          * recovery flag, so control requests cannot race a receive poll. */
@@ -106,11 +106,14 @@ static void worker(void *arg)
             d->tx_halted = false;
         }
         usb_osal_mutex_give(d->tx_lock);
-        if ((uint32_t)(usbh_ipheth_now_ms() - last_carrier) >= 1000) {
+        if (rx_ready && (uint32_t)(usbh_ipheth_now_ms() - last_carrier) >= 1000) {
             bool up = false;
             int rc = request(d, IPHETH_CMD_CARRIER);
             if (rc > 0) ipheth_carrier(d->dma->ctrl, (size_t)rc, &up);
             else count(&d->stats.usb_errors);
+            size_t f = usb_osal_enter_critical_section();
+            d->stats.carrier_up = up;
+            usb_osal_leave_critical_section(f);
             if (up != linked) { linked = up; usbh_ipheth_net_link(d->net, up); }
             last_carrier = usbh_ipheth_now_ms();
         }
@@ -124,13 +127,26 @@ static void worker(void *arg)
                 usb_osal_msleep(100);
                 continue;
             }
+            count(&d->stats.rx_submissions);
             pending = true;
         }
         if (usb_osal_sem_take(d->ready, 100) == 0) {
             pending = false;
             int rc = d->rx_result;
-            if (rc > 0 && !stopping(d)) {
-                if (ipheth_receive(d->mode, d->dma->rx, (size_t)rc, frame, d) < 0)
+            if (rc >= 0 && !stopping(d)) {
+                /* Linux treats even zero-length and 00 01 xx xx control
+                 * completions as proof of the receive path becoming ready.
+                 * These are not Ethernet frames and must not reach lwIP. */
+                bool control = rc == 0 || (rc == 4 &&
+                    d->dma->rx[0] == 0 && d->dma->rx[1] == 1);
+                size_t f = usb_osal_enter_critical_section();
+                d->stats.rx_ready = rx_ready = true;
+                ++d->stats.rx_completions;
+                d->stats.rx_bytes += (uint32_t)rc;
+                d->stats.rx_control_transfers += control;
+                usb_osal_leave_critical_section(f);
+                if (!control && ((uint32_t)rc > d->rx.transfer_buffer_length ||
+                    ipheth_receive(d->mode, d->dma->rx, (size_t)rc, frame, d) < 0))
                     count(&d->stats.rx_errors);
             } else if (rc < 0) {
                 count(&d->stats.usb_errors);
@@ -151,6 +167,9 @@ static void worker(void *arg)
         d->quarantined = true;
         USB_LOG_ERR("IPHETH: HCD cancellation failed; slot quarantined\r\n");
     }
+    size_t f = usb_osal_enter_critical_section();
+    d->stats.carrier_up = false;
+    usb_osal_leave_critical_section(f);
     usbh_ipheth_net_link(d->net, false);
     usb_osal_sem_give(d->exited); /* last access to device storage */
     usb_osal_thread_delete(NULL);
@@ -160,7 +179,11 @@ int usbh_ipheth_send(struct usbh_ipheth *d, const uint8_t *p, size_t n)
     if (!d) return IPHETH_ENODEV;
     usb_osal_mutex_take(d->tx_lock);
     int rc = IPHETH_ENODEV;
-    if (!stopping(d) && !d->tx_halted) {
+    size_t f = usb_osal_enter_critical_section();
+    bool ready = d->stats.rx_ready && d->stats.carrier_up;
+    if (!ready) ++d->stats.tx_deferred;
+    usb_osal_leave_critical_section(f);
+    if (ready && !stopping(d) && !d->tx_halted) {
         unsigned actual = 0;
         bool invalid = false, submit_error = false, short_transfer = false;
         rc = ipheth_transmit(p, n, d->dma->tx, sizeof(d->dma->tx));

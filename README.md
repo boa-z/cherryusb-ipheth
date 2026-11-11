@@ -6,7 +6,9 @@ stacks. The included network adapter targets RT-Thread with lwIP 2.x.
 
 This is an initial implementation, with host tests and D213 cross-builds.
 D213 board logs confirm composite USBMUX/IPHETH binding, MAC retrieval, NCM RX
-negotiation, carrier up and a locally valid IPv6 Link-Local address.
+negotiation, a carrier-on control reply and a locally valid IPv6 Link-Local address.
+The current driver additionally waits for successful Bulk IN before link-up,
+following Linux IPHETH; early carrier-only link-up in v3/v4 was premature.
 **Ethernet traffic and unplug/replug are not yet validated:** the first attached
 snapshot has RX=0, TX=0 and TX errors. See [validation](docs/validation.md).
 Pairing/trust is an external prerequisite; this project implements no pairing,
