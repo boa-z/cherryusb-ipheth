@@ -209,21 +209,31 @@ static int connect(struct usbh_hubport *h, uint8_t slot)
         }
     }
     usb_osal_leave_critical_section(f);
-    if (!d) return -USB_ERR_NOMEM;
+    if (!d) {
+        USB_LOG_ERR("IPHETH inactive: no device slot; other interfaces retained\r\n");
+        return 0;
+    }
     d->hport = h; d->intf = intf;
     d->tx_lock = usb_osal_mutex_create();
     d->ready = usb_osal_sem_create(0); d->exited = usb_osal_sem_create(0);
     int rc = -USB_ERR_NOMEM;
     bool selected = false;
+    const char *step = "OSAL allocation";
     if (!d->tx_lock || !d->ready || !d->exited) goto fail;
+    step = "SET_INTERFACE";
     rc = set_alt(d, intf.alternate);
     if (rc < 0) goto fail;
     selected = true;
     uint8_t mac[6];
+    step = "GET_MAC";
     rc = request(d, IPHETH_CMD_MAC);
+    USB_LOG_INFO("IPHETH GET_MAC returned %d data bytes\r\n", rc);
     if (rc < 0) goto fail;
+    step = "MAC validation";
     if (ipheth_mac(d->dma->ctrl, (size_t)rc, mac)) { rc = -USB_ERR_INVAL; goto fail; }
+    step = "ENABLE_NCM";
     rc = request(d, IPHETH_CMD_NCM);
+    USB_LOG_INFO("IPHETH ENABLE_NCM returned %d (success must be 0)\r\n", rc);
     if (rc == 0) d->mode = IPHETH_NCM;
     else if (rc == -USB_ERR_STALL) d->mode = IPHETH_LEGACY;
     else goto fail;
@@ -233,9 +243,11 @@ static int connect(struct usbh_hubport *h, uint8_t slot)
     d->in.bEndpointAddress = intf.in; d->out.bEndpointAddress = intf.out;
     d->in.bmAttributes = d->out.bmAttributes = 2;
     d->in.wMaxPacketSize = intf.in_mps; d->out.wMaxPacketSize = intf.out_mps;
+    step = "network registration";
     d->net = usbh_ipheth_net_attach(d, mac);
     if (!d->net) { rc = -USB_ERR_NOMEM; goto fail; }
     h->config.intf[slot].priv = d;
+    step = "worker creation";
     if (!usb_osal_thread_create("ipheth", CONFIG_USBHOST_IPHETH_THREAD_STACK,
           CONFIG_USBHOST_IPHETH_THREAD_PRIO, worker, d)) {
         h->config.intf[slot].priv = NULL;
@@ -245,9 +257,15 @@ static int connect(struct usbh_hubport *h, uint8_t slot)
         number, intf.alternate, intf.in, intf.out, d->mode == IPHETH_NCM ? "NCM RX" : "legacy RX");
     return 0;
 fail:
+    USB_LOG_ERR("IPHETH inactive: %s failed (%d); other interfaces retained\r\n", step, rc);
+    (void)step;
     if (selected && h->connected) set_alt(d, 0);
     release(d);
-    return rc < 0 ? rc : -USB_ERR_INVAL;
+    /* CherryUSB rolls back the whole composite device on a negative connect
+     * result. A validated but unavailable optional Ethernet function must
+     * not disconnect USBMUX or prevent external pairing/trust. No private
+     * object remains; disconnect is a no-op and replug retries initialization. */
+    return 0;
 }
 static int disconnect(struct usbh_hubport *h, uint8_t slot)
 {

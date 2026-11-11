@@ -150,7 +150,7 @@ static void init(struct usbh_hubport *h)
 }
 static void expect_failure(struct usbh_hubport *h)
 {
-    assert(ipheth_class_info.class_driver->connect(h, 2) < 0);
+    assert(ipheth_class_info.class_driver->connect(h, 2) == 0);
     assert(!h->config.intf[2].priv && h->config.intf[1].priv == (void *)0x1234);
     assert(atomic_load(&live_resources) == 0);
 }
@@ -174,7 +174,7 @@ int main(void)
     atomic_store(&mac_short, 0); atomic_store(&reject_attach, 1); expect_failure(&h);
     atomic_store(&reject_attach, 0); atomic_store(&fail_thread, 1); expect_failure(&h);
     atomic_store(&fail_thread, 0);
-    h.device_desc.idVendor = 0x1234; expect_failure(&h); h.device_desc.idVendor = 0x05ac;
+    h.device_desc.idVendor = 0x1234; assert(c->connect(&h, 2) < 0); h.device_desc.idVendor = 0x05ac;
     for (unsigned i = 0; i < 20; i++) {
         unsigned before = atomic_load(&delivered);
         atomic_store(&ncm_stall, i & 1); atomic_store(&auto_frame, 1);
@@ -218,7 +218,7 @@ int main(void)
     struct usbh_hubport h2, h3; init(&h2); init(&h3);
     assert(!c->connect(&h, 2)); assert(!c->connect(&h2, 2));
     unsigned allocated = atomic_load(&live_resources);
-    assert(c->connect(&h3, 2) < 0 && !h3.config.intf[2].priv);
+    assert(c->connect(&h3, 2) == 0 && !h3.config.intf[2].priv);
     assert(atomic_load(&live_resources) == allocated);
     assert(!c->disconnect(&h, 2)); assert(!c->disconnect(&h2, 2));
     assert(!atomic_load(&live_resources));

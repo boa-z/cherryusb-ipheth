@@ -2,9 +2,9 @@
 
 ## Automated results (2026-11-10)
 
-- CMake/CTest Debug: protocol and actual class tests passed.
-- CMake/CTest ASan + UBSan + default leak detection: both tests passed against
-  upstream CherryUSB commit a0054795 and the SDK-vendored CherryUSB 1.5 headers.
+- CMake/CTest Debug: protocol, class lifecycle and actual upstream EP0 tests passed.
+- CMake/CTest ASan + UBSan + default leak detection: all three tests passed against
+  official CherryUSB commit a0054795 as vendored by the upgraded SDK.
 - `-Wall -Wextra -Werror` used for host sources/tests.
 - Protocol tests: descriptor truncation/mutation, non-Apple VID, nonfixed
   interface 7/alternate ordering, MAC/carrier reply variants, legacy limits,
@@ -14,6 +14,10 @@
   negotiation, failed/short TX, 20 reconnect cycles, RX/TX STALL recovery,
   concurrent TX during disconnect, two simultaneous devices/slot exhaustion,
   failed cancellation quarantine and a late callback after detach.
+- Real upstream `usbh_control_transfer`: zero-data success, 6/64-byte MAC
+  replies, carrier byte, incomplete Setup accounting, STALL retry, timeout,
+  disconnected device and invalid arguments. This specifically guards the
+  length contract that mocked class tests alone did not exercise.
 - D213 complete firmware linked and packaged from SDK branch poc/carplay-oss.
   ELF inspection confirms both `ipheth_class_info` and `carplay_usbmux_class_info`
   inside the retained class section, plus `ipheth_status`.
@@ -38,15 +42,24 @@ Image:
 
 ```text
 output/d21x_demo128-nand_rt-thread_rtcarplay/images/d21x_demo128_nand_carplay_page_2k_block_128k_v1.0.0.img
-SHA256 5df9aa72b3a3e8d2548dca74363c76615744ae626d70061fcf78b5a11db8a351
+SHA256 02d34f3233b26d91e2c2bbe41b629a1705347f1cf28baef14af0d9f4bc32a174
 ```
+
+The unique v2 test artifact is
+`/home/boa/Documents/carplay-test-images/2026-11-10-cherryusb-1.6.1-v2/d213-carplay-ipheth-cherryusb-1.6.1-v2.img`.
+It contains official CherryUSB 1.6.1 at a0054795. The previous image (SHA256
+starting 5df9aa72) must not be used for this retest.
 
 The firmware builds with USB1 host and IPv6. The current image's startup says
 `rt-carplay: run carplay_start, then carplay_status ...`; an earlier Phase 1
 hardware-probe banner is a different application/image. Confirm `ipheth_status`
 exists before collecting network results. Board reports have confirmed the new
-entry banner and basic iPhone high-speed enumeration; Apple Ethernet binding
-and network traffic are still pending.
+entry banner, correct configuration selection, USBMUX binding and IPHETH class
+matching. The first attempt then failed with -2 during Ethernet initialization
+and the old enumerator detached USBMUX. The old control-length contract was
+identified as the cause; the official-stack v2 image and inactive-class failure
+handling address it. Successful vendor requests and actual network traffic
+remain pending hardware retest. No local board/serial access is available.
 
 ## Board procedure (115200, 8N1)
 
@@ -74,6 +87,10 @@ Expected supplied-phone descriptors: configuration index 3/value 4, USBMUX on
 interface 1, Apple ff/fd/01 on interface 2. Driver log should identify selected
 alternate and bulk endpoints (observed alt 1, IN 86 OUT 05); `i0` must register.
 These expected observations are not binding rules for other devices.
+GET_MAC should report data bytes only (6 or a padded reply up to 64), and
+successful ENABLE_NCM should return 0. A STALL may select legacy mode. Any
+other initialization failure should log its step and leave USBMUX attached;
+collect that diagnostic before interpreting the network state.
 
 Pairing/trust is external to the driver. Resolve it through an existing trusted
 host/application before interpreting no-carrier or silent traffic as a framing

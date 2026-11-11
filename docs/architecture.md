@@ -8,8 +8,8 @@ frame sizes and overlap. RX views cannot be retained after callback return.
 
 The class parses the selected configuration, validates Apple VID and ff/fd/01,
 then chooses the lowest alternate with one bulk IN and one bulk OUT. No PID,
-USB configuration, interface number or endpoint address is fixed. For CherryUSB
-1.5, the class table matches the exact interface triplet and `connect` rejects
+USB configuration, interface number or endpoint address is fixed. With the current CherryUSB
+external class API, the class table matches the exact interface triplet and `connect` rejects
 non-Apple VID, because that API has only a combined VID/PID match table.
 
 Each device owns its URBs, endpoint descriptors, DMA buffers, control setup,

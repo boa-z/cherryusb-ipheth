@@ -1,10 +1,18 @@
 # Compatibility and limits
 
-Build-checked with CherryUSB upstream commit
-`a0054795c44037ace8a2b77b6e610adbff2257ea` and the Luban-Lite SDK's vendored
-CherryUSB 1.5. Both use the external class registration API; neither requires a
-core patch for this driver. The application may need its own configuration
-selection hook to expose the desired interface.
+Validated in host builds against official CherryUSB 1.6.1 master commit
+`a0054795c44037ace8a2b77b6e610adbff2257ea`. Luban-Lite now vendors this exact
+upstream tree, with SDK integration outside it. No core patch is required by
+this external class driver. Configuration selection remains application policy.
+
+The old SDK 1.5 control API included eight Setup bytes in its return value;
+the first hardware attempt exposed this mismatch and failed Ethernet init,
+which in turn caused the old enumerator to detach USBMUX. That stack is no
+longer a supported runtime target. The official data-only EP0 return contract
+is covered by a regression test compiling the actual upstream core.
+Recognized Apple Ethernet initialization failures now leave the class inactive
+and retain other composite interfaces, with a diagnostic identifying the step.
+Replug after fixing the prerequisite to retry initialization.
 
 The D213 RT-Thread/lwIP 2.1.2 adapter has a complete SDK cross-build. No physical
 iPhone is currently validated by this repository. Host mocks are not evidence
