@@ -1,0 +1,9 @@
+cherryusb-ipheth
+New implementation: Copyright 2026 cherryusb-ipheth contributors.
+SPDX-License-Identifier: Apache-2.0
+
+Protocol references, not vendored sources:
+Linux drivers/net/usb/ipheth.c (Diego Giagio and contributors),
+BSD-3-Clause OR GPL-2.0-only; used as a behavior reference under BSD terms.
+FreeBSD sys/dev/usb/net/if_ipheth.c, BSD-2-Clause.
+See docs/sources.md for retrieval versions, license notices and differences.
