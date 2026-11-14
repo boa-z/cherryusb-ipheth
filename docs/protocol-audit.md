@@ -1,25 +1,18 @@
+[English](protocol-audit.md) | [简体中文](zh-CN/protocol-audit.md)
+
 # Protocol and activation audit — 2026-11-10
 
-This audit checks source, change history and host-side activation, rather than
-inferring undocumented commands from one device. The driver remains independent
-of pairing, application sessions and SDK-private APIs.
+This audit checks source, change history and host-side activation, rather than inferring undocumented commands from one device. The driver remains independent of pairing, application sessions and SDK-private APIs.
 
 ## References actually inspected
 
-- Linux `drivers/net/usb/ipheth.c`: snapshot recorded in sources.md, plus the
-  file's commit history fetched from the upstream GitHub API.
+- Linux `drivers/net/usb/ipheth.c`: snapshot recorded in sources.md, plus the file's commit history fetched from the upstream GitHub API.
 - FreeBSD `sys/dev/usb/net/if_ipheth.c`: snapshot recorded in sources.md.
-- [Original ipheth + ipheth-pair](https://github.com/dgiagio/ipheth/tree/c8df202085804a067f403324e234a992f428afa9),
-  revision `c8df202085804a067f403324e234a992f428afa9`.
-- [usbmuxd preflight.c](https://github.com/libimobiledevice/usbmuxd/blob/3ded00c9985a5108cfc7591a309f9a23d57a8cba/src/preflight.c),
-  revision `3ded00c9985a5108cfc7591a309f9a23d57a8cba`.
-- [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice/tree/fa0f79190142bc309307967c058f89c1b36eb6b8),
-  revision `fa0f79190142bc309307967c058f89c1b36eb6b8`; pairing/session tools and
-  public API were checked as external integration references, not vendored.
+- [Original ipheth + ipheth-pair](https://github.com/dgiagio/ipheth/tree/c8df202085804a067f403324e234a992f428afa9), revision `c8df202085804a067f403324e234a992f428afa9`.
+- [usbmuxd preflight.c](https://github.com/libimobiledevice/usbmuxd/blob/3ded00c9985a5108cfc7591a309f9a23d57a8cba/src/preflight.c), revision `3ded00c9985a5108cfc7591a309f9a23d57a8cba`.
+- [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice/tree/fa0f79190142bc309307967c058f89c1b36eb6b8), revision `fa0f79190142bc309307967c058f89c1b36eb6b8`; pairing/session tools and public API were checked as external integration references, not vendored.
 
-No pairing implementation or GPL helper source was copied into this component.
-Community reports supplement these primary sources; they are not wire-protocol
-specifications or proof of this phone's state.
+No pairing implementation or GPL helper source was copied into this component. Community reports supplement these primary sources; they are not wire-protocol specifications or proof of this phone's state.
 
 ## Findings and implementation decisions
 
@@ -38,16 +31,12 @@ specifications or proof of this phone's state.
 
 ## Interpretation of the actual V7 controller snapshots
 
-The earlier live commentary mistakenly identified two addresses as self-links.
-ELF symbols correct that interpretation:
+The earlier live commentary mistakenly identified two addresses as self-links. ELF symbols correct that interpretation:
 
-- QH pool base is `4035f800`; ten 128-byte entries per bus put bus 1 QH0 at
-  `4035fd00`.
+- QH pool base is `4035f800`; ten 128-byte entries per bus put bus 1 QH0 at `4035fd00`.
 - Async head base is `40362000`; 128-byte entries put bus 1's head at `40362080`.
-- `head_link=4035fd02` therefore points to RX QH0, and QH0
-  `link=40362082` points back to the async head. The two-node ring is valid.
-- The controller ASYNCLISTADDR register can change as the controller walks
-  this ring; changing between those addresses alone is not corruption.
+- `head_link=4035fd02` therefore points to RX QH0, and QH0 `link=40362082` points back to the async head. The two-node ring is valid.
+- The controller ASYNCLISTADDR register can change as the controller walks this ring; changing between those addresses alone is not corruption.
 
 | Observation | Supported conclusion |
 | --- | --- |
@@ -57,15 +46,11 @@ ELF symbols correct that interpretation:
 | Four qTD tokens remain 40008d80 | Each is Active, IN, IOC with 16384 bytes remaining; no byte progress or terminal halt/error is shown. It is not the previously reproduced completed-short-first-qTD scenario. |
 | No RX completion, no TX attempt | Consistent with a phone-side activation prerequisite, but not proof of one. Endpoint-specific scheduling/DMA faults remain possible; tokens alone are not a USB handshake capture. |
 
-The standalone short-IN HCD patch remains a tested general correction. The
-current board evidence does not justify blaming this outstanding RX on it or
-adding further queue/cache patches based on the misidentified addresses.
+The standalone short-IN HCD patch remains a tested general correction. The current board evidence does not justify blaming this outstanding RX on it or adding further queue/cache patches based on the misidentified addresses.
 
 ## Next validation: keep driver and activation independent
 
-Use the existing V7 image to establish host activation evidence before asking
-for another flash. Existing application commands can exercise USBMUX and its
-external pairing/session layer:
+Use the existing V7 image to establish host activation evidence before asking for another flash. Existing application commands can exercise USBMUX and its external pairing/session layer:
 
 ```text
 carplay_usb mux
@@ -74,54 +59,19 @@ ipheth_status
 usb_ehci_status 1
 ```
 
-Unlock the phone and respond to its trust dialog, if one appears. Record the
-exact USBMUX negotiation and pairing/session stage, not just whether endpoints
-bind. A session already being open needs no new pairing attempt; do not remove
-trust records or close sessions merely to run this checklist. The application's
-pair command also tries an application service after session setup: failure of
-that later service is not equivalent to missing Ethernet trust, and that
-service is not an IPHETH requirement. If the existing -4 timeout remains at an
-early USBMUX/Lockdown stage, investigate that separate external dependency
-without implementing pairing in the driver.
+Unlock the phone and respond to its trust dialog, if one appears. Record the exact USBMUX negotiation and pairing/session stage, not just whether endpoints bind. A session already being open needs no new pairing attempt; do not remove trust records or close sessions merely to run this checklist. The application's pair command also tries an application service after session setup: failure of that later service is not equivalent to missing Ethernet trust, and that service is not an IPHETH requirement. If the existing -4 timeout remains at an early USBMUX/Lockdown stage, investigate that separate external dependency without implementing pairing in the driver.
 
-If a Linux reference host is available, capture a baseline with the same phone
-and cable using current ipheth + usbmuxd/libimobiledevice. Compare interface
-class/configuration, vendor requests, successful session establishment, first
-Bulk IN and network traffic using usbmon. Personal-hotspot success in a different
-configuration is a useful device/cable baseline, not proof of CarPlay-config
-behavior or D213 trust. A Linux pair record must not be assumed valid for a
-new D213 identity. A PC baseline is not required to use the portable driver,
-but gives substantially stronger evidence than repeatedly varying alt or NCM
-buffer size on the board.
+If a Linux reference host is available, capture a baseline with the same phone and cable using current ipheth + usbmuxd/libimobiledevice. Compare interface class/configuration, vendor requests, successful session establishment, first Bulk IN and network traffic using usbmon. Personal-hotspot success in a different configuration is a useful device/cable baseline, not proof of CarPlay-config behavior or D213 trust. A Linux pair record must not be assumed valid for a new D213 identity. A PC baseline is not required to use the portable driver, but gives substantially stronger evidence than repeatedly varying alt or NCM buffer size on the board.
 
 ## Confidence and validation limits
 
-Plain CTest and ASan/UBSan suites cover the TX correction at 14, 42, 60, 64,
-70, 512 and 1514 bytes, exact capacities, byte preservation and a canary beyond
-the submitted length. Class tests require actual 42-byte USB OUT length in
-both NCM and legacy cases. The historical 70-byte timeout is unchanged by this
-padding correction. Hardware RX/TX was subsequently demonstrated in v13 (see below); reconnect
-stress remains unproven.
+Plain CTest and ASan/UBSan suites cover the TX correction at 14, 42, 60, 64, 70, 512 and 1514 bytes, exact capacities, byte preservation and a canary beyond the submitted length. Class tests require actual 42-byte USB OUT length in both NCM and legacy cases. The historical 70-byte timeout is unchanged by this padding correction. Hardware RX/TX was subsequently demonstrated in v13 (see below); reconnect stress remains unproven.
 
-Community [libimobiledevice #299](https://github.com/libimobiledevice/libimobiledevice/issues/299)
-corroborates the external-pairing boundary; it is an older discussion, not a
-current protocol specification. [usbmuxd #285](https://github.com/libimobiledevice/usbmuxd/issues/285)
-reports Linux NO-CARRIER despite reportedly successful pairing. That unverified
-report is a reminder that pairing success alone is not sufficient evidence of
-Ethernet readiness; it is not assumed to match this phone/model/iOS version.
+Community [libimobiledevice #299](https://github.com/libimobiledevice/libimobiledevice/issues/299) corroborates the external-pairing boundary; it is an older discussion, not a current protocol specification. [usbmuxd #285](https://github.com/libimobiledevice/usbmuxd/issues/285) reports Linux NO-CARRIER despite reportedly successful pairing. That unverified report is a reminder that pairing success alone is not sufficient evidence of Ethernet readiness; it is not assumed to match this phone/model/iOS version.
 
 
 ## Subsequent v13 hardware evidence
 
-The supplied D213 run completes external host activation and reports RX=79,
-TX=18, 81 receive completions, ready=yes and carrier=up. DHCP supplies
-172.20.10.4/28 and gateway/DNS 172.20.10.1. Later application traffic reaches the
-advertised wired IPv6 RTSP endpoint. This supersedes the earlier zero-RX state
-without making pairing/session code part of this component. Application
-protocol acceptance and media startup remain separate validation layers.
+The supplied D213 run completes external host activation and reports RX=79, TX=18, 81 receive completions, ready=yes and carrier=up. DHCP supplies 172.20.10.4/28 and gateway/DNS 172.20.10.1. Later application traffic reaches the advertised wired IPv6 RTSP endpoint. This supersedes the earlier zero-RX state without making pairing/session code part of this component. Application protocol acceptance and media startup remain separate validation layers.
 
-One RX error remains unclassified, with no recorded USB or TX errors. Sustained
-traffic and physical reconnect stress remain open; this is evidence for one
-observed phone/configuration. The application transport changes between v7 and
-v13 are recorded in its own validation document. A successful run does not
-prove one exclusive cause of the earlier intermittent transport failures.
+One RX error remains unclassified, with no recorded USB or TX errors. Sustained traffic and physical reconnect stress remain open; this is evidence for one observed phone/configuration. The application transport changes between v7 and v13 are recorded in its own validation document. A successful run does not prove one exclusive cause of the earlier intermittent transport failures.

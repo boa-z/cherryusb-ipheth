@@ -1,6 +1,12 @@
 name: host
 on: [push, pull_request]
 jobs:
+  documentation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test-check-docs.py
+      - run: python3 scripts/check-docs.py
   test:
     runs-on: ubuntu-24.04
     strategy:
