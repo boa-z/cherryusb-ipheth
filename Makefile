@@ -3,8 +3,12 @@ CC ?= cc
 CFLAGS ?= -O1 -g
 WARN = -std=c99 -Wall -Wextra -Werror -UNDEBUG
 .PHONY: check sanitize
-check: build/test_core
+check: build/test_core build/test_traffic
 	./build/test_core
+	./build/test_traffic
+build/test_traffic: tests/test_traffic.c port/rtthread/ipheth_traffic.h
+	mkdir -p build
+	$(CC) $(CFLAGS) $(WARN) tests/test_traffic.c -o $@
 build/test_core: src/ipheth.c tests/test_core.c include/ipheth.h
 	mkdir -p build
 	$(CC) $(CFLAGS) $(WARN) -Iinclude src/ipheth.c tests/test_core.c -o $@
@@ -12,6 +16,8 @@ sanitize:
 	mkdir -p build-san
 	$(CC) -O1 -g $(WARN) -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude src/ipheth.c tests/test_core.c -o build-san/test_core
 	ASAN_OPTIONS=detect_leaks=1 ./build-san/test_core
+	$(CC) -O1 -g $(WARN) -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_traffic.c -o build-san/test_traffic
+	ASAN_OPTIONS=detect_leaks=1 ./build-san/test_traffic
 
 # Point at an external CherryUSB checkout; no CherryUSB source is vendored.
 CHERRYUSB_ROOT ?= ../CherryUSB

@@ -256,6 +256,38 @@ static void ipheth_probe(int argc, char **argv)
     rt_kprintf("[ipheth-probe] periodic carrier %s; initial query retained\n", enabled ? "on" : "off");
 }
 MSH_CMD_EXPORT(ipheth_probe, Apple Ethernet single variable carrier experiment);
+static void neighbor_text(const uint8_t ip[16], char text[40])
+{
+    rt_snprintf(text, 40,
+        "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+        ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7],
+        ip[8], ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15]);
+}
+static void print_neighbors(unsigned device, const char *direction,
+                            const struct ipheth_traffic *traffic)
+{
+    for (unsigned j = 0; j < 4; ++j) {
+        unsigned slot = (traffic->neighbor_next + j) % 4U;
+        const struct ipheth_neighbor *r = &traffic->neighbors[slot];
+        if (!r->ordinal) continue;
+        char source[40], destination[40], target[40];
+        neighbor_text(r->source, source);
+        neighbor_text(r->destination, destination);
+        neighbor_text(r->target, target);
+        rt_kprintf("[ipheth-nd] i%u %s #%u type=%u hop=%u mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+            device, direction, r->ordinal, r->type, r->hop_limit,
+            r->source_mac[0], r->source_mac[1], r->source_mac[2],
+            r->source_mac[3], r->source_mac[4], r->source_mac[5]);
+        /* Each call must fit RT-Thread's 128-byte console buffer, including
+         * its newline. Repeat identity so interleaved status logs remain usable. */
+        rt_kprintf("[ipheth-nd] i%u %s #%u src=%s\n",
+            device, direction, r->ordinal, source);
+        rt_kprintf("[ipheth-nd] i%u %s #%u dst=%s\n",
+            device, direction, r->ordinal, destination);
+        rt_kprintf("[ipheth-nd] i%u %s #%u target=%s\n",
+            device, direction, r->ordinal, target);
+    }
+}
 void ipheth_status(void)
 {
     bool any = false;
@@ -303,6 +335,8 @@ void ipheth_status(void)
             rx.syn, tx.syn, rx.syn_ack, tx.syn_ack, rx.rst, tx.rst);
         rt_kprintf("  TCP last RX=%u->%u TX=%u->%u\n",
             rx.source_port, rx.destination_port, tx.source_port, tx.destination_port);
+        print_neighbors(i, "RX", &rx);
+        print_neighbors(i, "TX", &tx);
     }
     if (!any) rt_kprintf("IPHETH: no network interface registered; check enumeration/initialization errors\n");
 }
