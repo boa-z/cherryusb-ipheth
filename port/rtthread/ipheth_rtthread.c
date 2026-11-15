@@ -94,7 +94,8 @@ void *usbh_ipheth_net_attach(struct usbh_ipheth *usb, const uint8_t mac[6])
             rt_mutex_detach(&n->lock); goto fail;
         }
         n->initialized = true;
-        rt_kprintf("IPHETH network %s registered\n", name);
+        rt_kprintf("IPHETH network %s registered input=%s\n", name,
+                   LWIP_TCPIP_CORE_LOCKING_INPUT ? "direct" : "queued");
     }
     /* Address updates run in the lwIP thread; never hold the TX lock across
      * a tcpip callback. The USB pointer is published only after setup. */

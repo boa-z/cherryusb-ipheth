@@ -18,6 +18,7 @@ static atomic_int rx_fault, tx_stall, kill_failure;
 static atomic_int bad_block, reject_receive;
 static atomic_uint halt_cleared, carrier_requests;
 static atomic_int tx_delay, tx_entered, carrier_delay, carrier_entered;
+static atomic_int tx_hold;
 static atomic_uint expected_tx_length = 60;
 static struct usbh_ipheth *bound;
 static struct usbh_urb *pending[2];
@@ -99,6 +100,10 @@ int usbh_submit_urb(struct usbh_urb *u)
     if (u->ep->bEndpointAddress == 5) {
         assert(u->timeout == 1000 && !u->complete);
         assert(u->transfer_buffer_length == atomic_load(&expected_tx_length));
+        if (atomic_load(&tx_hold)) {
+            atomic_store(&tx_entered, 1);
+            while (atomic_load(&tx_hold)) usb_osal_msleep(1);
+        }
         if (atomic_load(&tx_delay)) { atomic_store(&tx_entered, 1); usb_osal_msleep(80); }
         if (atomic_load(&tx_failure)) return -USB_ERR_IO;
         if (atomic_exchange(&tx_stall, 0)) return -USB_ERR_STALL;
@@ -304,6 +309,37 @@ int main(void)
     usb_osal_msleep(1100);wait_link();
     assert(!c->disconnect(&h, 2));
     puts("probe test: RX progresses during 120ms Carrier; polling off/on; slow TX; window reset");
+    /* An independent synchronous TX must not hold the sole RX URB idle.
+     * Keep TX blocked until after checking RX, rather than relying on a
+     * host wall-clock threshold or completing TX to make the test pass. */
+    for (unsigned legacy = 0; legacy < 2; ++legacy) {
+        atomic_store(&ncm_stall, (int)legacy);
+        atomic_store(&auto_frame, 1);
+        assert(!c->connect(&h, 2)); wait_link();
+        struct usbh_ipheth_stats before, after;
+        usbh_ipheth_get_stats(bound, &before);
+        atomic_store(&tx_entered, 0); atomic_store(&tx_hold, 1);
+        pthread_t sender;
+        assert(!pthread_create(&sender, NULL, concurrent_send, bound));
+        for (unsigned i = 0; i < 500 && !atomic_load(&tx_entered); ++i)
+            usb_osal_msleep(1);
+        assert(atomic_load(&tx_entered));
+        complete_pending(0);
+        bool progressed = false;
+        for (unsigned i = 0; i < 500; ++i) {
+            usbh_ipheth_get_stats(bound, &after);
+            if (after.rx_submissions > before.rx_submissions) {
+                progressed = true; break;
+            }
+            usb_osal_msleep(1);
+        }
+        atomic_store(&tx_hold, 0);
+        assert(!pthread_join(sender, NULL));
+        assert(progressed);
+        assert(!c->disconnect(&h, 2));
+        assert(!atomic_load(&live_resources));
+    }
+    puts("RX rearmed during blocked TX in NCM and legacy modes");
     /* Separate malformed NCM from callback failure, and drain reason/header
      * snapshots without retaining any DMA buffer view across rearm/unplug. */
     atomic_store(&ncm_stall, 0);

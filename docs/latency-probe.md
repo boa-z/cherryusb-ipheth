@@ -28,7 +28,7 @@ ipheth_probe carrier on
 
 Use a single attachment with sustained changing content: on for 30 seconds, off for 30, on for 30, discard the first report after each switch. Compare video RX cadence and windowed wake/rearm with Carrier time and TX duration. If off removes Carrier samples but does not improve rearm/FPS, periodic Carrier is not established as the main bottleneck. No hardware FPS gain is claimed.
 
-The actual-worker host regression injects a 120ms Carrier operation, completes an independent RX during it and observes delayed wake/rearm; it checks off/on, slow synchronous TX timing, window reset, and the existing lifecycle/error cases. This demonstrates the blocking mechanism, not its frequency on a real host.
+The actual-worker host regression injects a 120ms Carrier operation and confirms independent RX consumption/rearm while it is still in progress. A separate test holds synchronous TX behind a gate and requires RX rearm before releasing TX, in NCM and legacy modes. The old unconditional TX-lock path fails this regression. Tests also cover Carrier off/on, slow TX timing, window reset and lifecycle/error cases. They establish software independence, not a measured board FPS gain.
 # RX error classification (v26)
 
 `rx_errors` counts failed completion-block processing, not individual lost Ethernet frames. The diagnostic receive API preserves the original parser checks, return codes and callback order. It separates size/signature/header/ block/table/DPE range/frame size/overlap/termination failures from callback failure. A callback failure still stops delivery of subsequent datagrams, as before; `callback_remaining` counts the current and subsequent validated but not successfully delivered datagrams.
@@ -40,3 +40,5 @@ Linux's inspected NCM callback does not enforce every extra constraint in this p
 ## IPv6 startup header counters
 
 `ipheth_status` also reports cumulative IPv6 RX/TX header observations since attach: neighbor solicitation (`NS`), neighbor advertisement (`NA`), TCP `SYN`, `SYNACK`, `RST` and the last source/destination ports. RX observes frames before lwIP input; TX observes successful USB sends, not remote receipt. These are header observations without checksum validation. IPv6 extension headers contribute only to the IPv6 total, and fragmented TCP is not guessed. The counters allocate no memory, retain no payload and print only on a status request. They implement no application policy and change no packet acceptance or forwarding.
+
+For RT-Thread/lwIP, queued protocol input can keep synchronous ACK transmission out of the RX worker. The adapter reports input=direct or input=queued when first registering the netif. Select this in the platform lwIP configuration; the portable class does not set lwIP policy. A bounded mailbox can still reject packets, which the adapter frees and counts as rx_input_fail. Compare this count and rx_parse/rx_rearm against TX duration when investigating stalls.

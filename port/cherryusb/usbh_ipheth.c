@@ -162,19 +162,36 @@ static void control_worker(void *arg)
     usb_osal_sem_give(d->control_exited);
     usb_osal_thread_delete(NULL);
 }
+static bool tx_recovery_pending(struct usbh_ipheth *d)
+{
+    size_t f = usb_osal_enter_critical_section();
+    bool halted = d->tx_halted;
+    usb_osal_leave_critical_section(f);
+    return halted;
+}
+static void set_tx_halted(struct usbh_ipheth *d, bool halted)
+{
+    size_t f = usb_osal_enter_critical_section();
+    d->tx_halted = halted;
+    usb_osal_leave_critical_section(f);
+}
 static void worker(void *arg)
 {
     struct usbh_ipheth *d = arg;
     bool pending = false, have_completion = false;
     uint32_t last_completed = 0;
     while (!stopping(d)) {
-        /* Recovery and Carrier share private EP0 storage under control_lock. */
-        usb_osal_mutex_take(d->tx_lock);
-        if (d->tx_halted && !stopping(d) && clear_halt(d, &d->out) == 0) {
-            d->tx.data_toggle = 0;
-            d->tx_halted = false;
+        /* A normal synchronous TX (including a TCP ACK) must not gate RX
+         * rearm. Only an actual TX STALL needs this lock and EP0 recovery.
+         * Recheck after locking because another worker may have stopped. */
+        if (tx_recovery_pending(d)) {
+            usb_osal_mutex_take(d->tx_lock);
+            if (tx_recovery_pending(d) && !stopping(d) && clear_halt(d, &d->out) == 0) {
+                d->tx.data_toggle = 0;
+                set_tx_halted(d, false);
+            }
+            usb_osal_mutex_give(d->tx_lock);
         }
-        usb_osal_mutex_give(d->tx_lock);
         if (!pending) {
             usb_osal_sem_reset(d->ready);
             usbh_bulk_urb_fill(&d->rx, d->hport, &d->in, d->dma->rx,
@@ -274,7 +291,7 @@ int usbh_ipheth_send(struct usbh_ipheth *d, const uint8_t *p, size_t n)
     bool ready = d->stats.rx_ready && d->stats.carrier_up;
     if (!ready) ++d->stats.tx_deferred;
     usb_osal_leave_critical_section(f);
-    if (ready && !stopping(d) && !d->tx_halted) {
+    if (ready && !stopping(d) && !tx_recovery_pending(d)) {
         unsigned actual = 0;
         bool invalid = false, submit_error = false, short_transfer = false;
         rc = ipheth_transmit(p, n, d->dma->tx, sizeof(d->dma->tx));
@@ -287,7 +304,7 @@ int usbh_ipheth_send(struct usbh_ipheth *d, const uint8_t *p, size_t n)
             latency(&d->probe.tx_urb, usbh_ipheth_now_ms() - tx_started);
             actual = d->tx.actual_length;
             submit_error = rc < 0;
-            if (rc == -USB_ERR_STALL) d->tx_halted = true;
+            if (rc == -USB_ERR_STALL) set_tx_halted(d, true);
             if (!rc && actual != length) {
                 rc = IPHETH_EIO;
                 short_transfer = true;
