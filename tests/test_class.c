@@ -63,7 +63,7 @@ static void *run(void *arg)
 usb_osal_thread_t usb_osal_thread_create(const char *n, uint32_t stack, uint32_t prio, usb_thread_entry_t e, void *arg)
 {
     (void)n; (void)stack; (void)prio;
-    if (atomic_load(&fail_thread)) return NULL;
+    if (atomic_load(&fail_thread)>0 && atomic_fetch_sub(&fail_thread,1)==1) return NULL;
     struct launch *a = malloc(sizeof(*a)); assert(a); a->entry = e; a->arg = arg;
     pthread_t id; assert(!pthread_create(&id, NULL, run, a)); pthread_detach(id); return (void *)1;
 }
@@ -199,13 +199,14 @@ int main(void)
     assert(ipheth_class_info.bInterfaceClass == 0xff && ipheth_class_info.bInterfaceSubClass == 0xfd);
     assert(ipheth_class_info.bInterfaceProtocol == 1);
     struct usbh_hubport h; init(&h);
-    for (int i = 1; i <= 3; i++) { atomic_store(&fail_alloc, i); expect_failure(&h); }
+    for (int i = 1; i <= 5; i++) { atomic_store(&fail_alloc, i); expect_failure(&h); }
     atomic_store(&fail_alloc, 0);
     atomic_store(&fail_cmd, IPHETH_CMD_MAC); expect_failure(&h);
     atomic_store(&fail_cmd, IPHETH_CMD_NCM); expect_failure(&h);
     atomic_store(&fail_cmd, -1); atomic_store(&mac_short, 1); expect_failure(&h);
     atomic_store(&mac_short, 0); atomic_store(&reject_attach, 1); expect_failure(&h);
     atomic_store(&reject_attach, 0); atomic_store(&fail_thread, 1); expect_failure(&h);
+    atomic_store(&fail_thread, 2); expect_failure(&h);
     atomic_store(&fail_thread, 0);
     h.device_desc.idVendor = 0x1234; assert(c->connect(&h, 2) < 0); h.device_desc.idVendor = 0x05ac;
     for (unsigned i = 0; i < 20; i++) {
@@ -246,8 +247,7 @@ int main(void)
     assert(atomic_load(&halt_cleared) == 2);
     assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
     assert(!c->disconnect(&h, 2));
-    /* Actual worker: a delayed periodic Carrier request postpones servicing
-     * an independently completed RX URB. No change to completion ownership. */
+    /* A slow EP0 query must not prevent RX consumption/rearm. */
     atomic_store(&auto_frame, 1);
     assert(!c->connect(&h, 2)); wait_link();
     struct usbh_ipheth_probe probe;
@@ -263,9 +263,13 @@ int main(void)
         usb_osal_msleep(1);
     }
     usbh_ipheth_take_probe(bound, &probe);
-    assert(probe.carrier.max_ms >= 100 && probe.rx_wake.max_ms >= 50);
-    assert(probe.rx_rearm.max_ms >= 50);
+    assert(probe.rx_wake.max_ms < 100 && probe.rx_rearm.max_ms < 100);
+    struct usbh_ipheth_stats progressed; usbh_ipheth_get_stats(bound, &progressed);
+    assert(progressed.rx_submissions > baseline.rx_submissions);
     atomic_store(&carrier_delay, 0);
+    usb_osal_msleep(150); /* let the in-flight control query finish */
+    usbh_ipheth_take_probe(bound, &probe);
+    assert(probe.carrier.max_ms >= 100);
     usbh_ipheth_set_carrier_poll(bound, false);
     unsigned polls_before = atomic_load(&carrier_requests);
     usb_osal_msleep(1150);
@@ -283,8 +287,23 @@ int main(void)
     usbh_ipheth_take_probe(bound, &probe);
     assert(!probe.tx_urb.count && !probe.rx_rearm.count); /* window reset */
     atomic_store(&tx_delay, 0);
+    /* Failed control traffic must not flap a healthy link on one sample. */
+    struct usbh_ipheth_stats carrier_base; usbh_ipheth_get_stats(bound,&carrier_base);
+    atomic_store(&fail_cmd,IPHETH_CMD_CARRIER);
+    for(unsigned failure=1;failure<=3;++failure) {
+        struct usbh_ipheth_stats current={0};
+        for(unsigned wait=0;wait<2000;++wait) {
+            usbh_ipheth_get_stats(bound,&current);
+            if(current.usb_errors>=carrier_base.usb_errors+failure)break;
+            usb_osal_msleep(1);
+        }
+        assert(current.usb_errors==carrier_base.usb_errors+failure);
+        assert(current.carrier_up==(failure<3));
+    }
+    atomic_store(&fail_cmd,-1);
+    usb_osal_msleep(1100);wait_link();
     assert(!c->disconnect(&h, 2));
-    puts("probe test: 120ms Carrier delays RX wake/rearm; polling off/on; slow synchronous TX; window reset");
+    puts("probe test: RX progresses during 120ms Carrier; polling off/on; slow TX; window reset");
     /* Separate malformed NCM from callback failure, and drain reason/header
      * snapshots without retaining any DMA buffer view across rearm/unplug. */
     atomic_store(&ncm_stall, 0);
@@ -346,7 +365,7 @@ int main(void)
     atomic_store(&kill_failure, 1);
     unsigned received = atomic_load(&delivered);
     assert(!c->disconnect(&h, 2));
-    assert(atomic_load(&live_resources) == 3);
+    assert(atomic_load(&live_resources) == 5);
     size_t f = usb_osal_enter_critical_section();
     struct usbh_urb *late = pending[0] ? pending[0] : pending[1];
     usb_osal_leave_critical_section(f);

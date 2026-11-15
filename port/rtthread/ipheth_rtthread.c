@@ -5,6 +5,7 @@
 #include <lwip/netifapi.h>
 #include <lwip/pbuf.h>
 #include "usbh_ipheth.h"
+#include "ipheth_traffic.h"
 #include <string.h>
 /* Persistent registered eth_devices avoid dangling tcpip mailbox pointers on
  * unplug. They remain down while detached and are reused on reconnect. */
@@ -19,6 +20,7 @@ struct ipheth_net {
     uint32_t probe_tx_errors, probe_rx_errors, probe_usb_errors;
     uint32_t rx_alloc_fail, rx_copy_fail, rx_input_fail;
     int rx_input_result;
+    struct ipheth_traffic rx_traffic, tx_traffic;
 };
 static struct ipheth_net nets[CONFIG_USBHOST_IPHETH_MAX_DEVICES];
 uint32_t usbh_ipheth_now_ms(void)
@@ -38,8 +40,14 @@ static rt_err_t transmit(rt_device_t dev, struct pbuf *p)
     if (!p || p->tot_len > sizeof(n->tx)) return -RT_EINVAL;
     rt_mutex_take(&n->lock, RT_WAITING_FOREVER);
     int rc = IPHETH_ENODEV;
-    if (n->usb && pbuf_copy_partial(p, n->tx, p->tot_len, 0) == p->tot_len)
+    if (n->usb && pbuf_copy_partial(p, n->tx, p->tot_len, 0) == p->tot_len) {
         rc = usbh_ipheth_send(n->usb, n->tx, p->tot_len);
+        if (!rc) {
+            rt_base_t f = rt_hw_interrupt_disable();
+            ipheth_traffic_observe(&n->tx_traffic, n->tx, p->tot_len);
+            rt_hw_interrupt_enable(f);
+        }
+    }
     rt_mutex_release(&n->lock);
     return rc == 0 ? RT_EOK : -RT_ERROR;
 }
@@ -98,6 +106,8 @@ void *usbh_ipheth_net_attach(struct usbh_ipheth *usb, const uint8_t mac[6])
     f = rt_hw_interrupt_disable();
     n->rx_alloc_fail = n->rx_copy_fail = n->rx_input_fail = 0;
     n->rx_input_result = 0;
+    memset(&n->rx_traffic, 0, sizeof(n->rx_traffic));
+    memset(&n->tx_traffic, 0, sizeof(n->tx_traffic));
     rt_hw_interrupt_enable(f);
     rt_mutex_release(&n->lock);
     return n;
@@ -111,17 +121,27 @@ void usbh_ipheth_net_detach(void *net)
     rt_mutex_take(&n->lock, RT_WAITING_FOREVER);
     n->usb = NULL; /* waits for every send that could retain the USB pointer */
     rt_mutex_release(&n->lock);
-    eth_device_linkchange(&n->eth, RT_FALSE);
+    usbh_ipheth_net_link(n, false);
     rt_base_t f = rt_hw_interrupt_disable(); n->claimed = false; rt_hw_interrupt_enable(f);
 }
 void usbh_ipheth_net_link(void *net, bool up)
 {
     struct ipheth_net *n = net;
-    eth_device_linkchange(&n->eth, up ? RT_TRUE : RT_FALSE);
+    /* This adapter pushes RX directly to tcpip_input, not eth_rx_thread.
+     * Its shared nonblocking RX mailbox can be full (e.g. physical Ethernet
+     * interrupts). Losing its sole link-up notification leaves IPv6 DAD
+     * stopped forever. Use the synchronous, core-serialized netif API, as
+     * the RT-Thread no-RX-thread path does. Never hold the TX mutex here. */
+    err_t rc = up ? netifapi_netif_set_link_up(n->eth.netif)
+                  : netifapi_netif_set_link_down(n->eth.netif);
+    if (rc != ERR_OK) rt_kprintf("IPHETH link update failed rc=%d up=%u\n", rc, up);
 }
 int usbh_ipheth_net_receive(void *net, const uint8_t *frame, size_t length)
 {
     struct ipheth_net *n = net;
+    rt_base_t flags = rt_hw_interrupt_disable();
+    ipheth_traffic_observe(&n->rx_traffic, frame, length);
+    rt_hw_interrupt_enable(flags);
     struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)length, PBUF_POOL);
     if (!p) {
         rt_base_t f = rt_hw_interrupt_disable(); ++n->rx_alloc_fail; rt_hw_interrupt_enable(f);
@@ -213,6 +233,7 @@ void ipheth_performance_report(void)
     }
 }
 #ifdef RT_USING_FINSH
+#include <lwip/tcpip.h>
 #include <finsh.h>
 /* Only changes periodic carrier queries after the initial query. No forced
  * link-up, shorter timeout, second URB, or lifetime/locking changes. */
@@ -234,11 +255,22 @@ static void ipheth_probe(int argc, char **argv)
     rt_kprintf("[ipheth-probe] periodic carrier %s; initial query retained\n", enabled ? "on" : "off");
 }
 MSH_CMD_EXPORT(ipheth_probe, Apple Ethernet single variable carrier experiment);
-static void ipheth_status(void)
+void ipheth_status(void)
 {
+    bool any = false;
     for (unsigned i = 0; i < CONFIG_USBHOST_IPHETH_MAX_DEVICES; i++) {
         struct ipheth_net *n = &nets[i];
         if (!n->initialized) continue;
+        any = true;
+        unsigned flags, ip6_state = 0;
+        LOCK_TCPIP_CORE();
+        flags = n->eth.netif->flags;
+#if LWIP_IPV6
+        ip6_state = netif_ip6_addr_state(n->eth.netif, 0);
+#endif
+        UNLOCK_TCPIP_CORE();
+        rt_kprintf("  netif i%u flags=0x%x up=%u link=%u ipv6_state=0x%x\n",
+            i, flags, !!(flags & NETIF_FLAG_UP), !!(flags & NETIF_FLAG_LINK_UP), ip6_state);
         struct usbh_ipheth_stats s = {0};
         rt_mutex_take(&n->lock, RT_WAITING_FOREVER);
         if (n->usb) usbh_ipheth_get_stats(n->usb, &s);
@@ -253,7 +285,16 @@ static void ipheth_status(void)
             s.tx_invalid_frames, s.tx_submit_errors, s.tx_short_transfers,
             s.last_tx_result, s.last_tx_length, s.last_tx_actual);
         rt_mutex_release(&n->lock);
+        rt_base_t f = rt_hw_interrupt_disable();
+        struct ipheth_traffic rx = n->rx_traffic, tx = n->tx_traffic;
+        rt_hw_interrupt_enable(f);
+        rt_kprintf("  IPv6 RX/TX: frames=%u/%u NS=%u/%u NA=%u/%u SYN=%u/%u SYNACK=%u/%u RST=%u/%u\n",
+            rx.ipv6, tx.ipv6, rx.ns, tx.ns, rx.na, tx.na,
+            rx.syn, tx.syn, rx.syn_ack, tx.syn_ack, rx.rst, tx.rst);
+        rt_kprintf("  TCP last RX=%u->%u TX=%u->%u\n",
+            rx.source_port, rx.destination_port, tx.source_port, tx.destination_port);
     }
+    if (!any) rt_kprintf("IPHETH: no network interface registered; check enumeration/initialization errors\n");
 }
 MSH_CMD_EXPORT(ipheth_status, Apple USB Ethernet counters);
 #endif

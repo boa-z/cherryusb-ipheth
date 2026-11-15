@@ -2,7 +2,9 @@
 
 # Latency probe and single-variable Carrier experiment
 
-The default transfer behavior is unchanged: one RX URB, synchronous TX with its existing 1000ms timeout, initial readiness/Carrier checks, periodic Carrier GET, and the existing disconnect/cancellation quarantine. No logs run in the class worker, ISR, or TX path. Elapsed clocks are wrapping monotonic milliseconds.
+The RX URB, TX timeout and cancellation policy are retained; Carrier now runs in an independent control worker: one RX URB, synchronous TX with its existing 1000ms timeout, initial readiness/Carrier checks, periodic Carrier GET, and the existing disconnect/cancellation quarantine. No logs run in the class worker, ISR, or TX path. Elapsed clocks are wrapping monotonic milliseconds.
+
+Current regressions require RX consumption and rearm to progress during a 120ms Carrier transaction. Both worker-creation failures and all five OSAL-allocation failures must unwind cleanly. The earlier blocking-mechanism experiment below is historical; hardware FPS improvement is still pending.
 
 The RT-Thread application may call `ipheth_performance_report()` from a low priority worker. It samples each attached interface every five seconds using a nonblocking adapter lock, snapshots/resets timing counters in a short critical section, releases the adapter lock, then prints short console lines. Metrics include count, average, histogram p95 upper bound, and exact window maximum. Bins are <=0, <=1, <=4, <=16, <=64, <=256, <=1000, >1000ms; the last bin reports its observed maximum as the upper bound. These are wall times, not CPU times.
 
@@ -34,3 +36,7 @@ The actual-worker host regression injects a 120ms Carrier operation, completes a
 The five-second reporter emits nonzero reason counts and the last failure's NTH16/NDP16 header fields (20 bytes), DPE index/offset/length and validated/ delivered counts. It never retains a DMA view or records Ethernet payload. The RT-Thread adapter separately counts pbuf allocation, copy and netif input failures, retaining the last input error code. No per-frame UART output is added. Adapter and USB snapshots have slightly different boundaries, so compare several windows rather than requiring exact single-window equality.
 
 Linux's inspected NCM callback does not enforce every extra constraint in this parser. A `block` or `table` failure is evidence to inspect a capture, not authorization to drop bounds checks. Header corruption from an HCD/DMA fault is another possible source. v26 changes no transfer, parser acceptance, timeout, DATA PID or cancellation behavior.
+
+## IPv6 startup header counters
+
+`ipheth_status` also reports cumulative IPv6 RX/TX header observations since attach: neighbor solicitation (`NS`), neighbor advertisement (`NA`), TCP `SYN`, `SYNACK`, `RST` and the last source/destination ports. RX observes frames before lwIP input; TX observes successful USB sends, not remote receipt. These are header observations without checksum validation. IPv6 extension headers contribute only to the IPv6 total, and fragmented TCP is not guessed. The counters allocate no memory, retain no payload and print only on a status request. They implement no application policy and change no packet acceptance or forwarding.
