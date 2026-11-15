@@ -2,6 +2,10 @@
 
 # 验证记录与板端步骤
 
+## 显式 USB 会话传输策略
+
+最新两份应用日志均在外部会话成功、两种 EHCI 完成顺序下保持首包未到，并返回 `03 03 03 00`；仅允许查询的 host hint 不足以恢复连接。可选接口 `usbh_ipheth_session_link(hport, ready)` 允许主机独立于观测 Carrier 授权已经建立的 USB 网络传输。默认主机仍要求 Carrier；调用方必须绑定 USB 挂载代次，并在关闭会话前撤销策略。RX 必须已成功提交且处于挂起或观测就绪状态。驱动单独报告 `session_link`/`link_up`，不伪造 Carrier、RX 或互联网可用性。ASan/UBSan 测试覆盖 NCM/Legacy 无首包、Carrier 为 3 或错误、发送、撤销、错误设备、重连复位及 RX 提交失败。iPhone 实机验收仍待完成；这是主机策略，不作为 Apple 协议规范。
+
 本文保留 2026-11-10 的历史硬件证据和调查阶段。各阶段的待验证说明只描述当时状态；下方后续结果取代了早先零流量观察。V2.1 文档版本没有驱动行为变更，尚未进行硬件运行。本次本地测试和文档审计记录见[文档审计](documentation-audit.md)。
 
 ## 当前硬件结果：v13（2026-11-10）
@@ -177,3 +181,10 @@ ipheth_status
 后续 D213 日志显示 MFi/识别及 CarPlayAvailability 成功，但 `submitted=1 completions=0`、Carrier down、IPv6 tentative，应用在 stage 3 超时。日志不能证明手机保持静默还是 USB 完成通知丢失。该日志产生于可选外部宿主会话通知加入之前；上文 v5 的仅首个 RX 门控预期保留为历史及默认行为。
 
 新的可选路径补充 ASan/UBSan 回归，覆盖 NCM/Legacy 静默首包启动、宿主会话通知后查询真实 Carrier up、Carrier down/失败、RX 无成功提交、正在查询 Carrier 时撤销、hport 隔离及重连清零。原有仅首个 RX 行为、空/控制完成、RX 重挂不等待 TX、STALL 及取消隔离测试继续运行。SDK 应用另行验证 USB 连接代次拒绝及所有者停止失败时保留激活。这些是 Host 检查，不能证明 iPhone 接受、实际收到 RX 或板端 FPS；该兼容策略仍待实机验证。
+
+
+## Carrier 响应可见性
+
+可选的显式 `usbh_ipheth_session_link()` 策略另有 Host 覆盖，检查 NCM/Legacy 静默启动、实际 TX、查询失败不伪造 Carrier、撤销、错误 hport、重连及 RX 提交失败。后续 D213 尝试能够取得有效 IPv6 并发送 StartSession 邀请，但 RX 始终为零，OUT 返回 `-USB_ERR_TIMEOUT` 且实际字节数为零。该次实机结果为 FAIL；生效 link 仅为策略状态，不能证明真实 USB 或 AirPlay 通信。认定手机端或控制器故障之前，仍需取得超时时的 OUT 描述符证据。
+
+2026-11-14 应用日志确认主机会话已激活，Carrier 返回四字节并被解析为 down，且没有 RX 完成。日志没有原始响应字节或后续控制器采样，因此外部激活修改不足以解决本次实机现象，尚不能认定配对失败或 USB 完成丢失。统计现在在控制事务锁及临界区保护下捕获最多八字节的厂商状态，与实际生效的链路状态分开记录。失败、空响应或长度非法的响应会清空捕获内容，不捕获 Ethernet、认证或 TLS 负载。Host 回归覆盖单字节、真实四字节 down/up 模式、最大长度，以及空响应、失败和超长结果；实机验收仍待完成。

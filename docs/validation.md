@@ -2,6 +2,10 @@
 
 # Validation record and board procedure
 
+## Explicit USB-session transport policy
+
+The latest two application logs both retain zero initial RX and vendor status `03 03 03 00` despite successful external session establishment and both EHCI completion orders. The polling-only host hint is insufficient. Optional `usbh_ipheth_session_link(hport, ready)` now lets a host authorize its established USB network transport independently of the observed vendor Carrier. Default hosts still require Carrier; the caller must bind policy to attachment generation and revoke it before session close. RX must have been successfully submitted and be armed or observed ready. The driver reports `session_link`/`link_up` separately, without fabricating Carrier, RX or internet connectivity. ASan/UBSan tests cover NCM/Legacy silent startup, Carrier 3/error, TX, revocation, wrong device, reconnect reset and failed RX submission. iPhone acceptance remains pending; this is host policy, not an asserted Apple protocol rule.
+
 This document preserves historical hardware evidence and investigation stages from 2026-11-10. Their pending statements describe those stages; later results below supersede earlier zero-traffic observations. The V2.1 documentation revision adds no driver behavior change and has not been run on hardware. Its current local tests and documentation audit are recorded in [documentation audit](documentation-audit.md).
 
 ## Current hardware result: v13 (2026-11-10)
@@ -178,3 +182,10 @@ Continue with existing v7 for external activation evidence, using the applicatio
 A subsequent D213 log reports successful MFi/identification and CarPlayAvailability, but `submitted=1 completions=0`, Carrier down, IPv6 tentative and application stage-3 timeout. The log does not prove whether the peer was silent or a USB completion was lost. It predates the optional external host-session hint; previous v5 first-RX-only expectations above remain historical/default behavior.
 
 The new opt-in path has ASan/UBSan regressions for silent NCM/Legacy startup, successful host-session publication with actual Carrier up, Carrier down/failure, no successful RX submission, revocation during a pending Carrier transaction, hport isolation and reconnect reset. Existing first-RX-only behavior, empty/control completion, TX-independent RX rearm, STALL and cancellation/quarantine regressions remain enabled. The SDK application separately tests USB attachment-epoch rejection and retaining activation on a failed owner stop. These are Host checks, not proof of iPhone acceptance, observed RX or board FPS. Board validation of this policy remains pending.
+
+
+## Carrier reply visibility
+
+The optional explicit `usbh_ipheth_session_link()` policy also has Host coverage for silent NCM/Legacy startup, actual TX, query errors without fabricated Carrier, revocation, wrong hport, reconnect and failed RX submission. A subsequent D213 attempt reaches valid IPv6 and sends StartSession invitations, but RX stays zero and OUT returns `-USB_ERR_TIMEOUT` with zero actual bytes. That board attempt is FAIL; effective link is a policy state rather than evidence of real USB or AirPlay traffic. Timeout-time OUT descriptor evidence is still needed before attributing the failure to the peer or controller.
+
+The 2026-11-14 application log confirms host activation and a four-byte Carrier result decoded as down, with no RX completion. It does not contain raw reply bytes or later controller samples. The external activation change is therefore insufficient for this board observation; neither pairing failure nor a lost USB completion is established. Stats now capture at most eight vendor-status bytes under the control transaction lock and a critical section, independently from the effective link. Failed, empty and invalid oversized results clear the capture. No Ethernet, authentication or TLS payload is captured. Host regressions cover one-byte, real four-byte down/up patterns, maximum-length replies and empty/failed/oversized results; board acceptance remains pending.

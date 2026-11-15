@@ -288,6 +288,12 @@ void ipheth_status(void)
         rt_kprintf("  Activation: host_session=%s RX_armed=%s carrier_queries=%u last_rc=%d\n",
             s.host_ready ? "ready" : "unknown", s.rx_armed ? "yes" : "no",
             s.carrier_queries, s.last_carrier_result);
+        rt_kprintf("  Link policy: session=%s effective=%s (Carrier remains observed)\n",
+            s.session_link ? "enabled" : "disabled", s.link_up ? "up" : "down");
+        rt_kprintf("  Carrier reply: captured=%u decoded=%s bytes=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+            s.carrier_reply_length, s.carrier_reply_up ? "up" : "down",
+            s.carrier_reply[0], s.carrier_reply[1], s.carrier_reply[2], s.carrier_reply[3],
+            s.carrier_reply[4], s.carrier_reply[5], s.carrier_reply[6], s.carrier_reply[7]);
         rt_mutex_release(&n->lock);
         rt_base_t f = rt_hw_interrupt_disable();
         struct ipheth_traffic rx = n->rx_traffic, tx = n->tx_traffic;

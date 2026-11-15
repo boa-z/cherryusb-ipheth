@@ -46,8 +46,15 @@ struct usbh_ipheth_stats {
     /* External host-session evidence is separate from observed RX readiness.
      * It permits a real Carrier query, never fabricates a completion/link. */
     bool host_ready, rx_armed;
+    /* Effective network link and explicit external USB-session policy are
+     * independent of the observed vendor Carrier reply. */
+    bool link_up, session_link;
     uint32_t carrier_queries;
     int last_carrier_result;
+    /* Bounded vendor-status bytes only; cleared on failed/invalid replies.
+     * Observed reply is distinct from the policy-controlled effective link. */
+    uint8_t carrier_reply[8], carrier_reply_length;
+    bool carrier_reply_up;
 };
 /* Callbacks run in thread context. attach/detach run in the hub thread;
  * receive/link run in the device worker. No callback may retain frame views.
@@ -64,6 +71,12 @@ struct usbh_hubport;
  * caller must bind the notification to its current USB attachment epoch.
  * Default false preserves Linux-style first-RX activation. Reset on detach. */
 void usbh_ipheth_host_ready(struct usbh_hubport *, bool ready);
+/* Opt-in alternative for an externally established USB network session.
+ * Unlike the polling hint above, this authorizes link/TX without tethering
+ * Carrier. Requires a submitted RX and live session; never fabricates RX or
+ * Carrier. The host must revoke it before closing its session, and bind it
+ * to the attachment epoch. Default false; reset on disconnect/reconnect. */
+void usbh_ipheth_session_link(struct usbh_hubport *, bool ready);
 /* No URB/buffer ownership changes. Disabling polling retains the initial
  * carrier query and last known link; diagnostic only, restored on reconnect. */
 void usbh_ipheth_set_carrier_poll(struct usbh_ipheth *, bool enabled);

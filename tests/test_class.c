@@ -20,6 +20,7 @@ static atomic_uint halt_cleared, carrier_requests;
 static atomic_int tx_delay, tx_entered, carrier_delay, carrier_entered;
 static atomic_int tx_hold;
 static atomic_int carrier_value = 4;
+static atomic_int carrier_length = 1;
 static atomic_int rx_submit_failure;
 static atomic_uint expected_tx_length = 60;
 static struct usbh_ipheth *bound;
@@ -93,7 +94,16 @@ int usbh_control_transfer(struct usbh_hubport *h, struct usb_setup_packet *s, ui
         atomic_store(&carrier_entered, 1);
         usb_osal_msleep((uint32_t)atomic_load(&carrier_delay));
     }
-    p[0] = (uint8_t)atomic_load(&carrier_value); return 1;
+    int length = atomic_load(&carrier_length);
+    memset(p, 0, IPHETH_CTRL_SIZE);
+    p[0] = (uint8_t)atomic_load(&carrier_value);
+    if (length > 1) {
+        /* Real four-byte status examples differ from the one-byte reply. */
+        p[0] = atomic_load(&carrier_value) == 4 ? 6 : 4;
+        p[1] = (uint8_t)atomic_load(&carrier_value);
+        p[2] = 3; p[3] = atomic_load(&carrier_value) == 4 ? 4 : 0;
+    }
+    return length;
 }
 static void put16(uint8_t *p, unsigned n) { p[0] = (uint8_t)n; p[1] = (uint8_t)(n >> 8); }
 int usbh_submit_urb(struct usbh_urb *u)
@@ -465,6 +475,101 @@ int main(void)
     assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
     atomic_store(&carrier_delay, 0);
     puts("host activation requires armed RX; revocation during Carrier request rejects stale up");
+    /* Capture the actual status rather than infer it from transfer length.
+     * Failed/oversized replies clear bytes, never expose old MAC/status data. */
+    const int reply_lengths[] = {1, 4, 4, 64, 65, 0, -1};
+    for (unsigned i = 0; i < sizeof(reply_lengths) / sizeof(reply_lengths[0]); ++i) {
+        int length = reply_lengths[i];
+        atomic_store(&carrier_length, length);
+        atomic_store(&carrier_value, i == 1 ? 3 : 4);
+        if (length == -1) atomic_store(&fail_cmd, IPHETH_CMD_CARRIER);
+        assert(!c->connect(&h, 2)); usbh_ipheth_host_ready(&h, true);
+        struct usbh_ipheth_stats capture = {0};
+        for (unsigned wait = 0; wait < 1000; ++wait) {
+            usbh_ipheth_get_stats(bound, &capture);
+            if (capture.carrier_queries) break;
+            usb_osal_msleep(1);
+        }
+        assert(capture.carrier_queries == 1);
+        assert(capture.last_carrier_result == (length == -1 ? -USB_ERR_IO : length));
+        unsigned captured = length > 0 && length <= 64 ? (length > 8 ? 8U : (unsigned)length) : 0;
+        assert(capture.carrier_reply_length == captured);
+        assert(capture.carrier_reply_up == (captured && i != 1));
+        if (captured) {
+            assert(capture.carrier_reply[0] == (length == 1 ? 4 : i == 1 ? 4 : 6));
+            if (length > 1) assert(capture.carrier_reply[1] == (i == 1 ? 3 : 4));
+        }
+        for (unsigned j = captured; j < sizeof(capture.carrier_reply); ++j)
+            assert(capture.carrier_reply[j] == 0);
+        assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+        atomic_store(&fail_cmd, -1);
+    }
+    atomic_store(&carrier_length, 1); atomic_store(&carrier_value, 4);
+    puts("Carrier status capture: one/four/max/invalid/empty/failed replies passed");
+    /* A host-owned USB network session is distinct from Linux tethering
+     * Carrier. Model the board's silent RX + status 03 without injecting a
+     * first packet. Default/hint-only policy must still reject it. */
+    for (unsigned legacy = 0; legacy < 2; ++legacy) {
+        atomic_store(&ncm_stall, (int)legacy);
+        atomic_store(&carrier_length, 4); atomic_store(&carrier_value, 3);
+        assert(!c->connect(&h, 2));
+        usbh_ipheth_host_ready(&h, true);
+        struct usbh_ipheth_stats session = {0};
+        for (unsigned wait = 0; wait < 1000; ++wait) {
+            usbh_ipheth_get_stats(bound, &session);
+            if (session.carrier_queries) break;
+            usb_osal_msleep(1);
+        }
+        assert(session.rx_armed && session.carrier_queries && !session.carrier_up);
+        assert(!session.link_up && !session.session_link && !session.rx_completions);
+        assert(usbh_ipheth_send(bound, packet, sizeof(packet)) == IPHETH_ENODEV);
+        struct usbh_hubport other = {0};
+        usbh_ipheth_session_link(&other, true);
+        usbh_ipheth_get_stats(bound, &session); assert(!session.session_link);
+        usbh_ipheth_session_link(&h, true);
+        for (unsigned wait = 0; wait < 500; ++wait) {
+            usbh_ipheth_get_stats(bound, &session);
+            if (session.link_up) break;
+            usb_osal_msleep(1);
+        }
+        assert(session.link_up && session.session_link && !session.carrier_up);
+        assert(!session.rx_ready && !session.rx_completions && !session.carrier_reply_up);
+        assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
+        /* A later down/error reply cannot silently change the session policy
+         * or be relabelled Carrier-up merely because effective link is up. */
+        unsigned queries = session.carrier_queries;
+        atomic_store(&fail_cmd, IPHETH_CMD_CARRIER);
+        for (unsigned wait = 0; wait < 1800; ++wait) {
+            usbh_ipheth_get_stats(bound, &session);
+            if (session.carrier_queries > queries) break;
+            usb_osal_msleep(1);
+        }
+        assert(session.carrier_queries > queries && session.link_up && !session.carrier_up);
+        assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
+        usbh_ipheth_session_link(&h, false);
+        assert(usbh_ipheth_send(bound, packet, sizeof(packet)) == IPHETH_ENODEV);
+        for (unsigned wait = 0; wait < 500; ++wait) {
+            usbh_ipheth_get_stats(bound, &session);
+            if (!session.link_up) break;
+            usb_osal_msleep(1);
+        }
+        assert(!session.link_up && !session.session_link && !session.rx_ready);
+        assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+        atomic_store(&fail_cmd, -1);
+        assert(!c->connect(&h, 2)); usbh_ipheth_get_stats(bound, &session);
+        assert(!session.session_link && !session.link_up && !session.host_ready);
+        assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+    }
+    atomic_store(&ncm_stall, 0); atomic_store(&carrier_length, 1); atomic_store(&carrier_value, 4);
+    atomic_store(&rx_submit_failure, 1);
+    assert(!c->connect(&h, 2)); usbh_ipheth_session_link(&h, true);
+    usb_osal_msleep(120);
+    usbh_ipheth_get_stats(bound, &not_armed);
+    assert(not_armed.session_link && !not_armed.rx_submissions && !not_armed.link_up);
+    assert(usbh_ipheth_send(bound, packet, sizeof(packet)) == IPHETH_ENODEV);
+    assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+    atomic_store(&rx_submit_failure, 0);
+    puts("USB-session policy: silent NCM/legacy, Carrier 3/error, revoke, epoch isolation, failed RX and reconnect passed");
     /* Distinct hports have independent slots/URBs; exhaustion is harmless. */
     struct usbh_hubport h2, h3; init(&h2); init(&h3);
     assert(!c->connect(&h, 2)); assert(!c->connect(&h2, 2));
