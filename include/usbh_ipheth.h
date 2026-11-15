@@ -43,6 +43,11 @@ struct usbh_ipheth_stats {
     /* A successful Bulk IN completion (including empty/control transfers)
      * establishes readiness, following Linux ipheth; no pairing protocol. */
     bool rx_ready, carrier_up;
+    /* External host-session evidence is separate from observed RX readiness.
+     * It permits a real Carrier query, never fabricates a completion/link. */
+    bool host_ready, rx_armed;
+    uint32_t carrier_queries;
+    int last_carrier_result;
 };
 /* Callbacks run in thread context. attach/detach run in the hub thread;
  * receive/link run in the device worker. No callback may retain frame views.
@@ -54,6 +59,11 @@ int usbh_ipheth_net_receive(void *, const uint8_t *, size_t);
 void usbh_ipheth_net_link(void *, bool);
 int usbh_ipheth_send(struct usbh_ipheth *, const uint8_t *, size_t);
 void usbh_ipheth_get_stats(struct usbh_ipheth *, struct usbh_ipheth_stats *);
+struct usbh_hubport;
+/* Optional host policy after successful external session activation. The
+ * caller must bind the notification to its current USB attachment epoch.
+ * Default false preserves Linux-style first-RX activation. Reset on detach. */
+void usbh_ipheth_host_ready(struct usbh_hubport *, bool ready);
 /* No URB/buffer ownership changes. Disabling polling retains the initial
  * carrier query and last known link; diagnostic only, restored on reconnect. */
 void usbh_ipheth_set_carrier_poll(struct usbh_ipheth *, bool enabled);

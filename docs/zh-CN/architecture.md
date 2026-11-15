@@ -8,7 +8,7 @@ Class Driver 解析已选定的配置，校验 Apple VID 和 ff/fd/01，再选�
 
 每个设备独立持有 URB、端点描述符、DMA 缓冲区、控制请求 Setup、信号量和 TX 互斥锁。EP0 Setup 不复用 `hport->setup`；USB 栈的控制传输锁负责与其他 class 串行访问 EP0。数据传输不使用共享 EP0 互斥锁。USBMUX 独立保留自己的接口、私有数据和 URB。
 
-设备 worker 提交异步 RX，并通过信号量接收完成通知；回调只发布结果，不重新提交，也不访问 USB 栈。worker 经网络适配器复制帧。与 Linux IPHETH 一样，首次成功 Bulk IN 完成后，才轮询 Carrier 并发布链路上线。成功的空传输和四字节 00 01 xx xx 控制通知会建立接收就绪状态，但不交付 Ethernet 帧。此后由独立控制 worker 使用允许回绕的单调时钟每秒轮询一次 Carrier。控制互斥锁保护私有 EP0 存储，避免与 halt 恢复冲突。Carrier 等待不再阻塞 RX 消费和重挂。已建立链路在连续三次事务失败后才下线，成功查询明确 down 时仍立即下线。RX 尚未就绪或 Carrier 未上线时，发送返回 ENODEV，增加 tx_deferred，且不提交 USB 传输。该状态只反映数据通道就绪程度，不实现配对或信任协议。重连会清除就绪状态。USB 错误按退避策略重试；RX STALL 会清除 halt 并重置 RX toggle。TX 使用独立互斥锁同步执行，超时为 1 秒；TX STALL 的恢复交由 worker 处理。
+设备 worker 提交异步 RX，并通过信号量接收完成通知；回调只发布结果，不重新提交，也不访问 USB 栈。worker 经网络适配器复制帧。默认激活遵循 Linux IPHETH：首次成功 Bulk IN 后才轮询 Carrier；空传输或四字节 00 01 xx xx 控制通知建立 `rx_ready`，不交付 Ethernet 帧。外部已独立激活的宿主会话可通过可选的 `usbh_ipheth_host_ready(hport, true)` 通知，在 RX 成功提交后、首个完成前允许查询真实 Carrier。上线和 TX 仍须 Carrier 正向应答；在 RX 实测就绪前，TX 还要求 `host_ready` 和 `rx_armed`。撤销通知会立即阻止首个 RX 前的 TX 路径，由控制 worker 降低链路；正在执行的 Carrier 查询返回时也重新检查激活状态。通知不是驱动执行了认证。拔插重连清零。独立控制 worker 使用允许回绕的单调时钟每秒查询 Carrier，私有 EP0 互斥锁与 halt 恢复共享。已建立链路连续三次事务失败后下线；成功查询明确 down 时立即下线。正常 RX 不等待 TX 互斥锁，只有真实 TX STALL 恢复才获取。USB 错误按退避策略重试，TX 同步超时为 1 秒。激活通知生命周期要求见[移植说明](porting.md)。
 
 拔出时依次执行：标记 stopping；等待 RX 和控制两个 worker 确认；取消未完成的 RX；报告链路下线；等待网络 TX 使用方退出；只清除本接口的私有指针；删除同步对象并回收槽位。每个 worker 发出确认是它对设备存储的最后一次访问。任一 worker 创建失败都会回滚网络适配和全部五个 OSAL 对象。如果 HCD 取消失败，就隔离设备槽位及其对象，避免复用可能仍被 DMA 或回调访问的内存。该策略有意占用此槽位，直到重启。
 

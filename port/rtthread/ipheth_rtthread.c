@@ -285,6 +285,9 @@ void ipheth_status(void)
         rt_kprintf("  TX failures: frame=%u submit=%u short=%u last=%d length=%u actual=%u\n",
             s.tx_invalid_frames, s.tx_submit_errors, s.tx_short_transfers,
             s.last_tx_result, s.last_tx_length, s.last_tx_actual);
+        rt_kprintf("  Activation: host_session=%s RX_armed=%s carrier_queries=%u last_rc=%d\n",
+            s.host_ready ? "ready" : "unknown", s.rx_armed ? "yes" : "no",
+            s.carrier_queries, s.last_carrier_result);
         rt_mutex_release(&n->lock);
         rt_base_t f = rt_hw_interrupt_disable();
         struct ipheth_traffic rx = n->rx_traffic, tx = n->tx_traffic;

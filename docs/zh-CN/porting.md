@@ -25,3 +25,11 @@ RT-Thread Ethernet 设备在拔出后仍以 i0/i1 保持注册。注册使用 RT
 ## EHCI 多 qTD 短 IN
 
 64 KiB NCM 请求要求 HCD 在较早的 qTD 以短包结束时完成 bulk IN URB，即使后续 qTD 仍为 Active。固定版本 a0054795 的 EHCI 实现在此路径存在已复现缺陷。D213 SDK 带有独立且经过测试的控制器补丁；该补丁不包含在此可移植驱动中。参见 validation.md 中的 v6 记录。不要缩小 NCM 缓冲区或伪造标准 CDC 描述符来掩盖控制器完成处理缺陷。其他 HCD 也必须满足同样的短传输契约。
+
+## 可选的外部宿主激活
+
+`usbh_ipheth_host_ready(hport, true)` 是由所有者主动选择的兼容策略，前提是外部已经独立完成宿主会话，例如 Lockdown StartSession 成功并打开 CarKit。它允许在不假定手机立即发送首个 Bulk IN 的情况下查询 Carrier。不执行配对、不把 MFi 成功单独视为宿主信任、不设置 `rx_ready`、不跳过 IPv6 DAD，也不伪造 Carrier。首个 RX 完成前的 TX 要求真实 Carrier 正向应答及 RX 已挂起。不调用该接口时，默认仍遵循 Linux 的首个 RX 门控。这是本地设计策略，不是 Apple 已公开的协议要求，也不能证明某次板端故障的唯一原因。
+
+只通知会话成功对应的 hport 及连接代次。旧会话的延迟完成不得激活复用相同 hport 地址的新手机。D213 平台验证 USB 快照代次，并在支持嵌套的同一 OSAL 临界区中发布非阻塞通知。会话所有者停止后、关闭传输前，用 false 撤销；所有者停止失败时保留会话和通知。物理拔出会清除驱动状态。等待网络/core 回调时不得持有 TX 互斥锁。
+
+`ipheth_status` 分别报告 `host_session`、`RX_armed`、实测 RX 就绪、真实 Carrier、`carrier_queries` 和 `last_rc`。宿主会话就绪但 RX 完成为零时，如果 Carrier 查询失败或仍 down，还须调查控制器、USB 与手机状态。通知本身不能证明首个 RX 或实机成功。

@@ -6,7 +6,7 @@
 
 适用于 CherryUSB 的外部 Apple iPhone USB Ethernet Host Class。协议核心为 C99，不依赖 USB 库、操作系统或网络栈。随附网络适配器面向 RT-Thread 和 lwIP 2.x。
 
-Host 测试和 D213 交叉编译通过。用户提供的 v13 板端日志确认：外部宿主激活后，USBMUX/IPHETH 复合接口绑定、MAC 读取、Apple NCM RX 协商、双向 Ethernet 流量和 DHCP 成功，地址 172.20.10.4/28、网关 172.20.10.1。接口具有有效 IPv6 Link-Local 地址；后续应用日志显示经已公布有线 IPv6 端点进行 RTSP 请求。驱动遵循 Linux IPHETH，在首次成功 Bulk IN 后才允许上线。记录了一次 RX 错误，其原因、持续流量及拔出/重插稳定性仍待验证。参见[验证记录](docs/zh-CN/validation.md)和[协议审计](docs/zh-CN/protocol-audit.md)。配对/信任是外部前置条件；本项目不实现配对、认证、应用会话或设备级 USB 配置策略。
+Host 测试和 D213 交叉编译通过。用户提供的 v13 板端日志确认：外部宿主激活后，USBMUX/IPHETH 复合接口绑定、MAC 读取、Apple NCM RX 协商、双向 Ethernet 流量和 DHCP 成功，地址 172.20.10.4/28、网关 172.20.10.1。接口具有有效 IPv6 Link-Local 地址；后续应用日志显示经已公布有线 IPv6 端点进行 RTSP 请求。驱动默认遵循 Linux IPHETH，在首次成功 Bulk IN 后才查询 Carrier。可选的外部宿主会话通知允许在首个 RX 完成前查询真实 Carrier；该兼容策略已通过 Host 测试，仍待实机验证。记录了一次 RX 错误，其原因、持续流量及拔出/重插稳定性仍待验证。参见[验证记录](docs/zh-CN/validation.md)和[协议审计](docs/zh-CN/protocol-audit.md)。配对/信任是外部前置条件；本项目不实现配对、认证、应用会话或设备级 USB 配置策略。
 
 ## 功能
 
@@ -73,7 +73,7 @@ python3 scripts/check-docs.py
 
 ## USB 与网络生命周期
 
-宿主在 class 绑定前选择 USB 配置。驱动只持有发现的 Ethernet 接口，选择其 alternate，读取 MAC 并协商 RX 模式。worker 等到首次成功 Bulk IN 完成后才轮询 Carrier/上线；空传输/控制完成可以建立 RX 就绪而不交付 Ethernet 帧。就绪不等于配对或认证。
+宿主在 class 绑定前选择 USB 配置。驱动只持有发现的 Ethernet 接口，选择其 alternate，读取 MAC 并协商 RX 模式。worker 默认等到首次成功 Bulk IN 完成后才轮询 Carrier；空传输/控制完成可以建立 RX 就绪而不交付 Ethernet 帧。外部所有者独立完成宿主会话激活后，可调用 `usbh_ipheth_host_ready(hport, true)`。这只允许在 RX 成功提交后轮询 Carrier；上线仍要求真实 Carrier 正向应答，首个 RX 完成前的发送还要求 RX 请求已挂起。`host_ready` 不会设置 `rx_ready`。关闭宿主会话时撤销通知，拔插清零，并把通知绑定到当前连接代次。这是显式兼容策略，不是已验证的 iOS 要求，驱动也不实现配对。
 
 TX 使用独立互斥锁同步执行，保留原有 1000 ms 超时；同时只有一个未完成 RX URB。Detach 停止 worker、取消 RX、报告下线、等待网络 TX 使用方退出，再释放接口资源。HCD 取消失败会隔离槽位直至重启。持久 RT-Thread netif 拒绝离线 TX，并在重插时复用。调用方必须将公开 send/stats/probe 操作与 detach 串行化，回调返回后不可保留 RX 视图。参见[架构](docs/zh-CN/architecture.md)。
 

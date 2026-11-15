@@ -171,3 +171,9 @@ ipheth_status
 [协议审计](protocol-audit.md) 交叉核对 Linux 变更历史、FreeBSD、原始 ipheth-pair、usbmuxd preflight 和 libimobiledevice。一项代码修正遵循 Linux 3e65efcca87a：两种模式都保留原始 Ethernet TX 长度，不增加最小 60 字节填充。修正后普通和 ASan/UBSan CTest 均为三个全部通过；核心测试检查精确长度/容量、数据不变及后方 canary，class 测试检查两种模式的 42 字节 OUT 提交。完整 D213 固件构建也通过。该修正不影响历史 70 字节 TX 超时，不能解释就绪前零 RX，当时尚未板端测试。
 
 继续用已有 v7 采集外部激活证据，使用应用命令 `carplay_usb mux`，仅在没有工作会话时执行 `carplay_usb pair`，再执行 `ipheth_status` 和 `usb_ehci_status 1`。记录实际协商/会话阶段及信任对话框行为。应用后续服务启动错误不同于信任/会话失败。USBMUX/Lockdown 超时调查应在驱动外进行。当时成功 Ethernet 流量和重连压力仍待验证。
+
+## 首个 RX 完成前的外部激活
+
+后续 D213 日志显示 MFi/识别及 CarPlayAvailability 成功，但 `submitted=1 completions=0`、Carrier down、IPv6 tentative，应用在 stage 3 超时。日志不能证明手机保持静默还是 USB 完成通知丢失。该日志产生于可选外部宿主会话通知加入之前；上文 v5 的仅首个 RX 门控预期保留为历史及默认行为。
+
+新的可选路径补充 ASan/UBSan 回归，覆盖 NCM/Legacy 静默首包启动、宿主会话通知后查询真实 Carrier up、Carrier down/失败、RX 无成功提交、正在查询 Carrier 时撤销、hport 隔离及重连清零。原有仅首个 RX 行为、空/控制完成、RX 重挂不等待 TX、STALL 及取消隔离测试继续运行。SDK 应用另行验证 USB 连接代次拒绝及所有者停止失败时保留激活。这些是 Host 检查，不能证明 iPhone 接受、实际收到 RX 或板端 FPS；该兼容策略仍待实机验证。

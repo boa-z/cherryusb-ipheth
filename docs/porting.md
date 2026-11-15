@@ -25,3 +25,11 @@ RT-Thread Ethernet devices persist as i0/i1 when detached. Registration uses RT-
 ## EHCI multi-qTD short IN
 
 The 64 KiB NCM request requires an HCD that completes a bulk IN URB when an early qTD ends with a short packet, even if following qTDs remain Active. The pinned a0054795 EHCI implementation has a reproduced defect in this path. The D213 SDK carries a separate tested controller patch; it is not bundled with this portable driver. See the v6 record in validation.md. Do not shrink NCM buffers or fabricate standard CDC descriptors to hide controller completion bugs. Other HCDs must satisfy the same short-transfer contract.
+
+## Optional external host activation
+
+`usbh_ipheth_host_ready(hport, true)` is an opt-in compatibility policy for an owner that has independently completed its host session, such as successful Lockdown StartSession and opening CarKit. It permits Carrier polling without assuming that the phone sends the first Bulk IN immediately. It does not perform pairing, accept MFi alone as host trust, set `rx_ready`, skip IPv6 DAD, or fabricate Carrier. Actual positive Carrier and armed RX are required for pre-first-RX TX. Without this call, Linux-style first-RX gating remains the default. This is locally designed policy, not a documented Apple protocol requirement or proven cause of a particular board failure.
+
+Notify only for the hport and attachment epoch whose session succeeded. An old completion must never activate a replacement phone at a reused hport address. The D213 platform validates its USB snapshot generation and publishes this nonblocking hint under the same nested-capable OSAL critical section. Revoke with false after the session owner has stopped and before closing its transport. A failed owner stop retains the session and hint. Physical detach resets driver state. Never hold the TX mutex while waiting on a network/core callback.
+
+`ipheth_status` separates `host_session`, `RX_armed`, observed RX readiness, actual Carrier, `carrier_queries` and `last_rc`. A ready host session with zero RX completions still needs controller/USB and peer investigation if Carrier fails or remains down. No first-RX or physical-device success is inferred from the hint.

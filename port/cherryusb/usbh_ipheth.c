@@ -30,6 +30,7 @@ struct usbh_ipheth {
     enum ipheth_rx_mode mode;
     int rx_result;
     uint32_t rx_completed_ms;
+    uint32_t rx_callback_count;
     bool carrier_poll_disabled;
     bool control_carrier;
     struct usbh_ipheth_probe probe;
@@ -54,6 +55,7 @@ static void stop_device(struct usbh_ipheth *d)
 {
     size_t f = usb_osal_enter_critical_section();
     d->stopping = true;
+    d->stats.host_ready = false;
     usb_osal_leave_critical_section(f);
 }
 static int request(struct usbh_ipheth *d, uint8_t cmd)
@@ -102,6 +104,8 @@ static void completed(void *arg, int n)
     size_t f = usb_osal_enter_critical_section();
     d->rx_completed_ms = usbh_ipheth_now_ms();
     d->rx_result = n;
+    ++d->rx_callback_count;
+    d->stats.rx_armed = false;
     usb_osal_leave_critical_section(f);
     usb_osal_sem_give(d->ready);
 }
@@ -130,9 +134,17 @@ static void control_worker(void *arg)
     bool queried = false, linked = false;
     while (!stopping(d)) {
         size_t f = usb_osal_enter_critical_section();
-        bool ready = d->stats.rx_ready;
+        bool ready = d->stats.rx_submissions &&
+            (d->stats.rx_ready || d->stats.host_ready);
         bool poll = !d->carrier_poll_disabled;
         usb_osal_leave_critical_section(f);
+        if (!ready && linked) {
+            f = usb_osal_enter_critical_section();
+            d->stats.carrier_up = false;
+            usb_osal_leave_critical_section(f);
+            linked = false;
+            usbh_ipheth_net_link(d->net, false);
+        }
         if (ready && (!queried || poll) &&
             (uint32_t)(usbh_ipheth_now_ms() - last) >= 1000U) {
             uint32_t started = usbh_ipheth_now_ms();
@@ -148,6 +160,10 @@ static void control_worker(void *arg)
             }
             if (stopping(d)) break;
             f = usb_osal_enter_critical_section();
+            ++d->stats.carrier_queries;
+            d->stats.last_carrier_result = rc;
+            /* Activation can be revoked during the synchronous request. */
+            if (!d->stats.rx_ready && !d->stats.host_ready) up = false;
             d->stats.carrier_up = up;
             usb_osal_leave_critical_section(f);
             if (up != linked) { linked = up; usbh_ipheth_net_link(d->net, up); }
@@ -198,7 +214,13 @@ static void worker(void *arg)
                 d->mode == IPHETH_NCM ? IPHETH_RX_NCM_MAX : IPHETH_RX_LEGACY_MAX,
                 0, completed, d);
             uint32_t submit_ms = usbh_ipheth_now_ms();
+            size_t arm_flags = usb_osal_enter_critical_section();
+            uint32_t callbacks = d->rx_callback_count;
+            usb_osal_leave_critical_section(arm_flags);
             if (usbh_submit_urb(&d->rx) < 0) {
+                arm_flags = usb_osal_enter_critical_section();
+                d->stats.rx_armed = false;
+                usb_osal_leave_critical_section(arm_flags);
                 count(&d->stats.usb_errors);
                 usb_osal_msleep(100);
                 continue;
@@ -207,8 +229,12 @@ static void worker(void *arg)
                 latency(&d->probe.rx_rearm, submit_ms - last_completed);
                 have_completion = false;
             }
-            count(&d->stats.rx_submissions);
-            count(&d->probe.rx_submissions);
+            arm_flags = usb_osal_enter_critical_section();
+            ++d->stats.rx_submissions;
+            ++d->probe.rx_submissions;
+            /* A test/HCD may complete synchronously inside submit. */
+            d->stats.rx_armed = d->rx_callback_count == callbacks;
+            usb_osal_leave_critical_section(arm_flags);
             pending = true;
         }
         if (usb_osal_sem_take(d->ready, 100) == 0) {
@@ -288,7 +314,8 @@ int usbh_ipheth_send(struct usbh_ipheth *d, const uint8_t *p, size_t n)
     latency(&d->probe.tx_lock, usbh_ipheth_now_ms() - lock_started);
     int rc = IPHETH_ENODEV;
     size_t f = usb_osal_enter_critical_section();
-    bool ready = d->stats.rx_ready && d->stats.carrier_up;
+    bool ready = d->stats.carrier_up && (d->stats.rx_ready ||
+        (d->stats.host_ready && d->stats.rx_armed));
     if (!ready) ++d->stats.tx_deferred;
     usb_osal_leave_critical_section(f);
     if (ready && !stopping(d) && !tx_recovery_pending(d)) {
@@ -353,6 +380,16 @@ void usbh_ipheth_get_stats(struct usbh_ipheth *d, struct usbh_ipheth_stats *s)
     if (!d || !s) return;
     size_t f = usb_osal_enter_critical_section();
     *s = d->stats;
+    usb_osal_leave_critical_section(f);
+}
+void usbh_ipheth_host_ready(struct usbh_hubport *hport, bool ready)
+{
+    size_t f = usb_osal_enter_critical_section();
+    for (unsigned i = 0; i < CONFIG_USBHOST_IPHETH_MAX_DEVICES; ++i) {
+        struct usbh_ipheth *d = &devices[i];
+        if (d->used && !d->stopping && d->hport == hport)
+            d->stats.host_ready = ready;
+    }
     usb_osal_leave_critical_section(f);
 }
 static void release(struct usbh_ipheth *d)

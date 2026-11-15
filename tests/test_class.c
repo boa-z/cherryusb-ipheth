@@ -19,6 +19,8 @@ static atomic_int bad_block, reject_receive;
 static atomic_uint halt_cleared, carrier_requests;
 static atomic_int tx_delay, tx_entered, carrier_delay, carrier_entered;
 static atomic_int tx_hold;
+static atomic_int carrier_value = 4;
+static atomic_int rx_submit_failure;
 static atomic_uint expected_tx_length = 60;
 static struct usbh_ipheth *bound;
 static struct usbh_urb *pending[2];
@@ -91,7 +93,7 @@ int usbh_control_transfer(struct usbh_hubport *h, struct usb_setup_packet *s, ui
         atomic_store(&carrier_entered, 1);
         usb_osal_msleep((uint32_t)atomic_load(&carrier_delay));
     }
-    p[0] = 4; return 1;
+    p[0] = (uint8_t)atomic_load(&carrier_value); return 1;
 }
 static void put16(uint8_t *p, unsigned n) { p[0] = (uint8_t)n; p[1] = (uint8_t)(n >> 8); }
 int usbh_submit_urb(struct usbh_urb *u)
@@ -111,6 +113,7 @@ int usbh_submit_urb(struct usbh_urb *u)
         return 0;
     }
     assert(u->ep->bEndpointAddress == 0x86 && !u->timeout && u->complete);
+    if (atomic_load(&rx_submit_failure)) return -USB_ERR_IO;
     if (atomic_exchange(&rx_fault, 0)) { u->complete(u->arg, -USB_ERR_STALL); }
     else if (atomic_exchange(&auto_frame, 0)) {
         uint8_t *p = u->transfer_buffer; memset(p, 0, 122);
@@ -176,7 +179,7 @@ static void *concurrent_send(void *arg)
 }
 static void wait_link(void)
 {
-    for (unsigned i = 0; i < 500; i++) {
+    for (unsigned i = 0; i < 1800; i++) {
         struct usbh_ipheth_stats s; usbh_ipheth_get_stats(bound, &s);
         if (s.carrier_up) return;
         usb_osal_msleep(1);
@@ -386,6 +389,82 @@ int main(void)
         assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
         assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
     }
+    /* A host that has independently opened its device session must be able
+     * to query actual Carrier even when the peer sends no initial IN packet.
+     * The opt-in cannot fabricate observed RX, authorize a failed/down
+     * Carrier, leak to another hport, or survive reconnect. */
+    for (unsigned mode = 0; mode < 2; ++mode) {
+        atomic_store(&ncm_stall, mode);
+        assert(!c->connect(&h, 2));
+        struct usbh_ipheth_stats s;
+        for (unsigned wait = 0; wait < 500; ++wait) {
+            usbh_ipheth_get_stats(bound, &s);
+            if (s.rx_armed) break;
+            usb_osal_msleep(1);
+        }
+        assert(s.rx_armed && !s.host_ready && !s.rx_ready && !s.carrier_up);
+        struct usbh_hubport unrelated = {0};
+        usbh_ipheth_host_ready(&unrelated, true);
+        usbh_ipheth_get_stats(bound, &s); assert(!s.host_ready);
+        unsigned polls = atomic_load(&carrier_requests);
+        atomic_store(&fail_cmd, IPHETH_CMD_CARRIER);
+        usbh_ipheth_host_ready(&h, true);
+        for (unsigned wait = 0; wait < 500; ++wait) {
+            usbh_ipheth_get_stats(bound, &s);
+            if (s.usb_errors) break;
+            usb_osal_msleep(1);
+        }
+        assert(s.host_ready && !s.rx_ready && !s.carrier_up && s.usb_errors);
+        assert(usbh_ipheth_send(bound, packet, sizeof(packet)) == IPHETH_ENODEV);
+        atomic_store(&fail_cmd, -1); atomic_store(&carrier_value, 3);
+        for (unsigned wait = 0; wait < 1800 && atomic_load(&carrier_requests) == polls; ++wait)
+            usb_osal_msleep(1);
+        assert(atomic_load(&carrier_requests) > polls);
+        usbh_ipheth_get_stats(bound, &s); assert(!s.carrier_up && !s.rx_completions);
+        assert(usbh_ipheth_send(bound, packet, sizeof(packet)) == IPHETH_ENODEV);
+        atomic_store(&carrier_value, 4); wait_link();
+        usbh_ipheth_get_stats(bound, &s);
+        assert(s.host_ready && s.rx_armed && !s.rx_ready && !s.rx_completions);
+        assert(!usbh_ipheth_send(bound, packet, sizeof(packet)));
+        usbh_ipheth_host_ready(&h, false);
+        assert(usbh_ipheth_send(bound, packet, sizeof(packet)) == IPHETH_ENODEV);
+        for (unsigned wait = 0; wait < 500; ++wait) {
+            usbh_ipheth_get_stats(bound, &s);
+            if (!s.carrier_up) break;
+            usb_osal_msleep(1);
+        }
+        assert(!s.host_ready && !s.carrier_up && !s.rx_completions);
+        usbh_ipheth_host_ready(&h, true); wait_link();
+        complete_pending(0); usb_osal_msleep(10);
+        usbh_ipheth_get_stats(bound, &s); assert(s.rx_ready && s.rx_completions == 1);
+        assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+        assert(!c->connect(&h, 2));
+        usbh_ipheth_get_stats(bound, &s);
+        assert(!s.host_ready && !s.rx_ready && !s.carrier_up);
+        assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+    }
+    puts("external host activation: silent NCM/legacy RX, real Carrier, revoke, isolation and reconnect passed");
+    atomic_store(&rx_submit_failure, 1);
+    assert(!c->connect(&h, 2)); usbh_ipheth_host_ready(&h, true);
+    usb_osal_msleep(120);
+    struct usbh_ipheth_stats not_armed; usbh_ipheth_get_stats(bound, &not_armed);
+    assert(not_armed.usb_errors && !not_armed.rx_armed && !not_armed.rx_submissions);
+    assert(!not_armed.carrier_queries && !not_armed.carrier_up);
+    assert(usbh_ipheth_send(bound, packet, sizeof(packet)) == IPHETH_ENODEV);
+    assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+    atomic_store(&rx_submit_failure, 0);
+    atomic_store(&carrier_delay, 120); atomic_store(&carrier_entered, 0);
+    assert(!c->connect(&h, 2)); usbh_ipheth_host_ready(&h, true);
+    for (unsigned wait = 0; wait < 500 && !atomic_load(&carrier_entered); ++wait)
+        usb_osal_msleep(1);
+    assert(atomic_load(&carrier_entered));
+    usbh_ipheth_host_ready(&h, false);
+    usb_osal_msleep(160);
+    usbh_ipheth_get_stats(bound, &not_armed);
+    assert(!not_armed.host_ready && !not_armed.carrier_up && not_armed.carrier_queries == 1);
+    assert(!c->disconnect(&h, 2)); assert(!atomic_load(&live_resources));
+    atomic_store(&carrier_delay, 0);
+    puts("host activation requires armed RX; revocation during Carrier request rejects stale up");
     /* Distinct hports have independent slots/URBs; exhaustion is harmless. */
     struct usbh_hubport h2, h3; init(&h2); init(&h3);
     assert(!c->connect(&h, 2)); assert(!c->connect(&h2, 2));
